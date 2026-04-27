@@ -4,7 +4,7 @@ use ingot_domain::ports::RepositoryError;
 
 use super::mapping::map_job;
 use crate::db::Database;
-use crate::store::helpers::db_err;
+use crate::store::helpers::{db_err, map_optional_row, required_row};
 
 impl Database {
     pub async fn list_jobs_by_item(&self, item_id: ItemId) -> Result<Vec<Job>, RepositoryError> {
@@ -72,10 +72,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_job)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_job)
     }
 
     pub async fn list_jobs_by_revision(
@@ -109,6 +106,6 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_job).transpose()
+        map_optional_row(row, map_job)
     }
 }

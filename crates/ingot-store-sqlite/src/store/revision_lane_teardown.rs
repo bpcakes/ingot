@@ -4,7 +4,9 @@ use ingot_domain::ports::{
     ConflictKind, RepositoryError, RevisionLaneTeardownMutation, RevisionLaneTeardownRepository,
 };
 
-use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, item_revision_is_stale, json_err,
+};
 use crate::db::Database;
 
 impl Database {
@@ -145,9 +147,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound);
-            }
+            ensure_rows_affected(result)?;
         }
 
         // 3. Workspace abandonments
@@ -173,9 +173,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound);
-            }
+            ensure_rows_affected(result)?;
         }
 
         // 4. Queue entry update
@@ -194,9 +192,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound);
-            }
+            ensure_rows_affected(result)?;
         }
 
         // 5. Git operation updates
@@ -227,9 +223,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound);
-            }
+            ensure_rows_affected(result)?;
         }
 
         // 6. Git operation activities

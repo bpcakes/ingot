@@ -1,6 +1,7 @@
 use ingot_domain::ids::{ItemId, ItemRevisionId};
 use ingot_domain::ports::{ConflictKind, RepositoryError};
 use serde::de::DeserializeOwned;
+use sqlx::sqlite::{SqliteQueryResult, SqliteRow};
 use sqlx::{Sqlite, Transaction};
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +47,32 @@ pub(super) fn db_write_err(err: sqlx::Error) -> RepositoryError {
         }
         other => db_err(other),
     }
+}
+
+pub(super) fn map_optional_row<T>(
+    row: Option<SqliteRow>,
+    map: impl FnOnce(&SqliteRow) -> Result<T, RepositoryError>,
+) -> Result<Option<T>, RepositoryError> {
+    row.as_ref().map(map).transpose()
+}
+
+pub(super) fn required<T>(value: Option<T>) -> Result<T, RepositoryError> {
+    value.ok_or(RepositoryError::NotFound)
+}
+
+pub(super) fn required_row<T>(
+    row: Option<SqliteRow>,
+    map: impl FnOnce(&SqliteRow) -> Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
+    required(map_optional_row(row, map)?)
+}
+
+pub(super) fn ensure_rows_affected(result: SqliteQueryResult) -> Result<(), RepositoryError> {
+    if result.rows_affected() == 0 {
+        return Err(RepositoryError::NotFound);
+    }
+
+    Ok(())
 }
 
 pub(super) fn json_err(err: serde_json::Error) -> RepositoryError {

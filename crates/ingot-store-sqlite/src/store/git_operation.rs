@@ -5,7 +5,9 @@ use ingot_domain::ports::{ConflictKind, GitOperationRepository, RepositoryError}
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, json_err, parse_json};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, parse_json,
+};
 use crate::db::Database;
 
 impl Database {
@@ -77,11 +79,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 
     pub async fn list_unresolved_git_operations(
@@ -121,7 +119,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_git_operation).transpose()
+        map_optional_row(row, map_git_operation)
     }
 
     pub async fn delete_investigation_ref_git_operations(

@@ -7,7 +7,7 @@ use ingot_domain::ports::{ConvergenceRepository, RepositoryError};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err};
+use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
 use crate::db::Database;
 
 impl Database {
@@ -35,10 +35,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_convergence)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_convergence)
     }
 
     pub async fn list_active_convergences(&self) -> Result<Vec<Convergence>, RepositoryError> {
@@ -131,11 +128,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 
     pub async fn list_convergences_by_revision(
@@ -170,7 +163,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_convergence).transpose()
+        map_optional_row(row, map_convergence)
     }
 
     pub async fn find_prepared_convergence_for_revision(
@@ -190,7 +183,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_convergence).transpose()
+        map_optional_row(row, map_convergence)
     }
 }
 

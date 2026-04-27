@@ -6,7 +6,7 @@ use ingot_domain::workspace::{Workspace, WorkspaceCommitState, WorkspaceState, W
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err};
+use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
 use crate::db::Database;
 
 impl Database {
@@ -20,10 +20,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_workspace)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_workspace)
     }
 
     pub async fn create_workspace(&self, workspace: &Workspace) -> Result<(), RepositoryError> {
@@ -78,11 +75,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 
     pub async fn find_authoring_workspace_for_revision(
@@ -102,7 +95,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_workspace).transpose()
+        map_optional_row(row, map_workspace)
     }
 
     pub async fn list_workspaces_by_item(
@@ -149,11 +142,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 }
 

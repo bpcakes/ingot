@@ -10,7 +10,7 @@ use sqlx::sqlite::SqliteRow;
 
 use super::item::insert_revision_query;
 
-use super::helpers::{db_err, db_write_err, json_err, parse_json};
+use super::helpers::{db_err, db_write_err, json_err, map_optional_row, parse_json, required_row};
 use crate::db::Database;
 
 impl Database {
@@ -38,10 +38,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_revision)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_revision)
     }
 
     pub async fn create_revision(&self, revision: &ItemRevision) -> Result<(), RepositoryError> {
@@ -63,7 +60,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref().map(map_revision_context).transpose()
+        map_optional_row(row, map_revision_context)
     }
 
     pub async fn upsert_revision_context(

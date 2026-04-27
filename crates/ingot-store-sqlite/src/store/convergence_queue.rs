@@ -5,7 +5,7 @@ use ingot_domain::ports::{ConvergenceQueueRepository, RepositoryError};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err};
+use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
 use crate::db::Database;
 
 impl Database {
@@ -37,10 +37,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_convergence_queue_entry)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_convergence_queue_entry)
     }
 
     pub async fn find_active_queue_entry_for_revision(
@@ -60,7 +57,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_convergence_queue_entry).transpose()
+        map_optional_row(row, map_convergence_queue_entry)
     }
 
     pub async fn find_queue_head(
@@ -82,7 +79,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_convergence_queue_entry).transpose()
+        map_optional_row(row, map_convergence_queue_entry)
     }
 
     pub async fn find_next_queued_entry(
@@ -105,7 +102,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_convergence_queue_entry).transpose()
+        map_optional_row(row, map_convergence_queue_entry)
     }
 
     pub async fn list_active_queue_entries_for_lane(
@@ -194,11 +191,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 }
 

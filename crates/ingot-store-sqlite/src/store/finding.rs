@@ -8,7 +8,10 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Sqlite, Transaction};
 
-use super::helpers::{db_err, db_write_err, json_err, parse_json};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, parse_json,
+    required_row,
+};
 use super::item::{insert_item_query, insert_revision_query};
 use crate::db::Database;
 
@@ -34,10 +37,7 @@ impl Database {
             .await
             .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_finding)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_finding)
     }
 
     pub async fn create_finding(&self, finding: &Finding) -> Result<(), RepositoryError> {
@@ -99,7 +99,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref().map(map_finding).transpose()
+        map_optional_row(row, map_finding)
     }
 
     pub async fn triage_finding(&self, finding: &Finding) -> Result<(), RepositoryError> {
@@ -250,11 +250,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 }
 

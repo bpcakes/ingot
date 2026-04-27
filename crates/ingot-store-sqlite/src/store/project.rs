@@ -6,7 +6,9 @@ use ingot_domain::project::{AgentRouting, AutoTriagePolicy, Project};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, json_err, parse_json};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, json_err, parse_json, required_row,
+};
 use crate::db::Database;
 
 fn serialize_agent_routing(
@@ -52,10 +54,7 @@ impl Database {
         .await
         .map_err(db_err)?;
 
-        row.as_ref()
-            .map(map_project)
-            .transpose()?
-            .ok_or(RepositoryError::NotFound)
+        required_row(row, map_project)
     }
 
     pub async fn create_project(&self, project: &Project) -> Result<(), RepositoryError> {
@@ -105,11 +104,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 
     pub async fn delete_project(&self, project_id: ProjectId) -> Result<(), RepositoryError> {
@@ -119,11 +114,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 }
 

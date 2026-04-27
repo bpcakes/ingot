@@ -9,7 +9,7 @@ use ingot_domain::ports::{
 };
 use sqlx::{Row, Sqlite, Transaction};
 
-use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err};
+use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err, required};
 use crate::db::Database;
 
 impl Database {
@@ -67,8 +67,8 @@ async fn apply_target_ref_advanced(
     .bind(mutation.expected_item_revision_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let convergence_row = required(convergence_row)?;
 
     let previous_status: ingot_domain::convergence::ConvergenceStatus =
         convergence_row.try_get("status").map_err(db_err)?;
@@ -96,8 +96,8 @@ async fn apply_target_ref_advanced(
     .bind(mutation.expected_item_revision_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let item_row = required(item_row)?;
 
     let lifecycle_state: String = item_row.try_get("lifecycle_state").map_err(db_err)?;
     let escalation_reason: Option<EscalationReason> =
@@ -119,8 +119,8 @@ async fn apply_target_ref_advanced(
     .bind(mutation.convergence_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let git_op_row = required(git_op_row)?;
 
     let previous_git_op_status: ingot_domain::git_operation::GitOperationStatus =
         git_op_row.try_get("status").map_err(db_err)?;
@@ -328,8 +328,8 @@ async fn apply_checkout_adoption_succeeded(
     .bind(mutation.expected_item_revision_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let convergence_row = required(convergence_row)?;
 
     let convergence_status: ingot_domain::convergence::ConvergenceStatus =
         convergence_row.try_get("status").map_err(db_err)?;
@@ -349,8 +349,8 @@ async fn apply_checkout_adoption_succeeded(
     .bind(mutation.expected_item_revision_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let item_row = required(item_row)?;
 
     let lifecycle_state: String = item_row.try_get("lifecycle_state").map_err(db_err)?;
     if lifecycle_state != "open" {
@@ -372,8 +372,8 @@ async fn apply_checkout_adoption_succeeded(
     .bind(mutation.convergence_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .ok_or(RepositoryError::NotFound)?;
+    .map_err(db_err)?;
+    let git_op_row = required(git_op_row)?;
 
     let previous_git_op_status: ingot_domain::git_operation::GitOperationStatus =
         git_op_row.try_get("status").map_err(db_err)?;

@@ -11,7 +11,7 @@ use super::ClaimQueuedAgentJobExecutionParams;
 use super::conflict::classify_job_conflict;
 use super::mapping::encode_job_input;
 use crate::db::Database;
-use crate::store::helpers::{db_err, db_write_err, serialize_optional_json};
+use crate::store::helpers::{db_err, db_write_err, ensure_rows_affected, serialize_optional_json};
 
 impl Database {
     pub async fn start_job_execution(
@@ -301,11 +301,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 
     pub async fn finish_job_non_success(
@@ -405,10 +401,6 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
-
-        Ok(())
+        ensure_rows_affected(result)
     }
 }

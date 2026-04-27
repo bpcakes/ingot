@@ -2,7 +2,7 @@ use ingot_domain::ports::{
     InvalidatePreparedConvergenceMutation, InvalidatePreparedConvergenceRepository, RepositoryError,
 };
 
-use super::helpers::{db_err, db_write_err, json_err};
+use super::helpers::{db_err, db_write_err, ensure_rows_affected, json_err};
 use crate::db::Database;
 
 impl Database {
@@ -44,9 +44,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
+        ensure_rows_affected(result)?;
 
         // 2. Update workspace (mark as stale) if present
         if let Some(workspace) = &mutation.workspace_update {
@@ -71,9 +69,7 @@ impl Database {
             .await
             .map_err(db_write_err)?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound);
-            }
+            ensure_rows_affected(result)?;
         }
 
         // 3. Update item (reset approval state)
@@ -90,9 +86,7 @@ impl Database {
         .await
         .map_err(db_write_err)?;
 
-        if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound);
-        }
+        ensure_rows_affected(result)?;
 
         // 4. Append activity
         let activity = &mutation.activity;
