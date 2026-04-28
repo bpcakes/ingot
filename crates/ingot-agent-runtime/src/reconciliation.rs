@@ -18,7 +18,7 @@ use ingot_domain::ports::{
     FinalizationTargetRefAdvancedMutation, FinishJobNonSuccessParams, ProjectMutationLockPort,
 };
 use ingot_domain::project::Project;
-use ingot_domain::revision::ItemRevision;
+use ingot_domain::revision::{ApprovalPolicy, ItemRevision};
 use ingot_domain::workspace::{RetentionPolicy, Workspace, WorkspaceKind, WorkspaceStatus};
 use ingot_git::commands::{delete_ref, head_oid, resolve_ref_oid};
 use ingot_git::project_repo::{
@@ -42,6 +42,15 @@ struct FinalizeOperationContext<'a> {
     mirror_target_ref: &'a GitRef,
     prepared_commit_oid: &'a CommitOid,
     paths: &'a ingot_git::project_repo::ProjectRepoPaths,
+}
+
+fn approval_resolution(policy: ApprovalPolicy) -> (ResolutionSource, ApprovalState) {
+    match policy {
+        ApprovalPolicy::Required => (ResolutionSource::ApprovalCommand, ApprovalState::Approved),
+        ApprovalPolicy::NotRequired => {
+            (ResolutionSource::SystemCommand, ApprovalState::NotRequired)
+        }
+    }
 }
 
 impl JobDispatcher {
@@ -250,20 +259,8 @@ impl JobDispatcher {
                     }
                     return Ok(FinalizeCompletionOutcome::Blocked);
                 }
-                let resolution_source = match context.revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => {
-                        ResolutionSource::ApprovalCommand
-                    }
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ResolutionSource::SystemCommand
-                    }
-                };
-                let approval_state = match context.revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => ApprovalState::Approved,
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ApprovalState::NotRequired
-                    }
-                };
+                let (resolution_source, approval_state) =
+                    approval_resolution(context.revision.approval_policy);
                 self.db
                     .apply_finalization_mutation(FinalizationMutation::CheckoutAdoptionSucceeded(
                         FinalizationCheckoutAdoptionSucceededMutation {
@@ -284,20 +281,8 @@ impl JobDispatcher {
                 Ok(FinalizeCompletionOutcome::Completed)
             }
             CheckoutFinalizationStatus::Synced => {
-                let resolution_source = match context.revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => {
-                        ResolutionSource::ApprovalCommand
-                    }
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ResolutionSource::SystemCommand
-                    }
-                };
-                let approval_state = match context.revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => ApprovalState::Approved,
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ApprovalState::NotRequired
-                    }
-                };
+                let (resolution_source, approval_state) =
+                    approval_resolution(context.revision.approval_policy);
                 self.db
                     .apply_finalization_mutation(FinalizationMutation::CheckoutAdoptionSucceeded(
                         FinalizationCheckoutAdoptionSucceededMutation {
@@ -334,20 +319,8 @@ impl JobDispatcher {
                 let convergence = self.db.get_convergence(convergence_id).await?;
                 let item = self.db.get_item(convergence.item_id).await?;
                 let revision = self.db.get_revision(convergence.item_revision_id).await?;
-                let resolution_source = match revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => {
-                        ResolutionSource::ApprovalCommand
-                    }
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ResolutionSource::SystemCommand
-                    }
-                };
-                let approval_state = match revision.approval_policy {
-                    ingot_domain::revision::ApprovalPolicy::Required => ApprovalState::Approved,
-                    ingot_domain::revision::ApprovalPolicy::NotRequired => {
-                        ApprovalState::NotRequired
-                    }
-                };
+                let (resolution_source, approval_state) =
+                    approval_resolution(revision.approval_policy);
                 self.db
                     .apply_finalization_mutation(FinalizationMutation::TargetRefAdvanced(
                         FinalizationTargetRefAdvancedMutation {

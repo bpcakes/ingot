@@ -25,6 +25,22 @@ pub struct JobTerminationResult {
     pub escalation_reason: Option<EscalationReason>,
 }
 
+struct NonSuccessTermination {
+    status: JobStatus,
+    outcome_class: Option<OutcomeClass>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+    escalation_reason: Option<EscalationReason>,
+    revision_stale_message: &'static str,
+    activities: Vec<TerminationActivity>,
+}
+
+struct TerminationActivity {
+    event_type: ActivityEventType,
+    subject: ActivitySubject,
+    payload: serde_json::Value,
+}
+
 /// Cancel an active job. Sets status to Cancelled, releases workspace (to `target_workspace_status`),
 /// and appends a JobCancelled activity.
 pub async fn cancel_job<J, W, A>(
@@ -41,55 +57,30 @@ where
     W: WorkspaceRepository,
     A: ActivityRepository,
 {
-    if !job.state.is_active() {
-        return Err(UseCaseError::JobNotActive);
-    }
-
-    job_repo
-        .finish_non_success(FinishJobNonSuccessParams {
-            job_id: job.id,
-            item_id: item.id,
-            expected_item_revision_id: job.item_revision_id,
-            status: JobStatus::Cancelled,
-            outcome_class: Some(OutcomeClass::Cancelled),
-            error_code: Some(cancel_reason.into()),
-            error_message: None,
-            escalation_reason: None,
-        })
-        .await
-        .map_err(|error| {
-            map_finish_non_success_error(
-                error,
-                "job cancellation does not match the current item revision",
-            )
-        })?;
-
-    let released_workspace_id = release_workspace(
+    terminate_non_success_job(
+        job_repo,
         workspace_repo,
-        job.state.workspace_id(),
+        activity_repo,
+        job,
+        item,
         target_workspace_status,
+        || {
+            Ok(NonSuccessTermination {
+                status: JobStatus::Cancelled,
+                outcome_class: Some(OutcomeClass::Cancelled),
+                error_code: Some(cancel_reason.into()),
+                error_message: None,
+                escalation_reason: None,
+                revision_stale_message: "job cancellation does not match the current item revision",
+                activities: vec![TerminationActivity {
+                    event_type: ActivityEventType::JobCancelled,
+                    subject: ActivitySubject::Job(job.id),
+                    payload: serde_json::json!({ "item_id": item.id, "reason": cancel_reason }),
+                }],
+            })
+        },
     )
-    .await?;
-
-    activity_repo
-        .append(&Activity {
-            id: ActivityId::new(),
-            project_id: job.project_id,
-            event_type: ActivityEventType::JobCancelled,
-            subject: ActivitySubject::Job(job.id),
-            payload: serde_json::json!({ "item_id": item.id, "reason": cancel_reason }),
-            created_at: Utc::now(),
-        })
-        .await?;
-
-    Ok(JobTerminationResult {
-        job_id: job.id,
-        project_id: job.project_id,
-        item_id: item.id,
-        revision_id: job.item_revision_id,
-        released_workspace_id,
-        escalation_reason: None,
-    })
+    .await
 }
 
 /// Fail an active job with a given outcome class. Sets the appropriate terminal status,
@@ -111,80 +102,53 @@ where
     W: WorkspaceRepository,
     A: ActivityRepository,
 {
-    if !job.state.is_active() {
-        return Err(UseCaseError::JobNotActive);
-    }
-
-    let status = failure_status(outcome_class).ok_or_else(|| {
-        UseCaseError::ProtocolViolation(
-            "Failure endpoints only accept transient_failure, terminal_failure, protocol_violation, or cancelled".into(),
-        )
-    })?;
-    let escalation_reason = failure_escalation_reason(job, outcome_class);
-
-    job_repo
-        .finish_non_success(FinishJobNonSuccessParams {
-            job_id: job.id,
-            item_id: item.id,
-            expected_item_revision_id: job.item_revision_id,
-            status,
-            outcome_class: Some(outcome_class),
-            error_code: error_code.clone(),
-            error_message,
-            escalation_reason,
-        })
-        .await
-        .map_err(|error| {
-            map_finish_non_success_error(
-                error,
-                "job failure does not match the current item revision",
-            )
-        })?;
-
-    let released_workspace_id = release_workspace(
+    terminate_non_success_job(
+        job_repo,
         workspace_repo,
-        job.state.workspace_id(),
+        activity_repo,
+        job,
+        item,
         target_workspace_status,
-    )
-    .await?;
+        || {
+            let status = failure_status(outcome_class).ok_or_else(|| {
+                UseCaseError::ProtocolViolation(
+                    "Failure endpoints only accept transient_failure, terminal_failure, protocol_violation, or cancelled".into(),
+                )
+            })?;
+            let escalation_reason = failure_escalation_reason(job, outcome_class);
 
-    if escalation_reason.is_some() {
-        activity_repo
-            .append(&Activity {
-                id: ActivityId::new(),
-                project_id: job.project_id,
-                event_type: ActivityEventType::ItemEscalated,
-                subject: ActivitySubject::Item(item.id),
-                payload: serde_json::json!({ "reason": escalation_reason }),
-                created_at: Utc::now(),
+            let event_type = if outcome_class == OutcomeClass::Cancelled {
+                ActivityEventType::JobCancelled
+            } else {
+                ActivityEventType::JobFailed
+            };
+
+            let mut activities = Vec::new();
+            if let Some(reason) = escalation_reason {
+                activities.push(TerminationActivity {
+                    event_type: ActivityEventType::ItemEscalated,
+                    subject: ActivitySubject::Item(item.id),
+                    payload: serde_json::json!({ "reason": reason }),
+                });
+            }
+            activities.push(TerminationActivity {
+                event_type,
+                subject: ActivitySubject::Job(job.id),
+                payload: serde_json::json!({ "item_id": item.id, "error_code": error_code.as_deref() }),
+            });
+
+            Ok(NonSuccessTermination {
+                status,
+                outcome_class: Some(outcome_class),
+                error_code,
+                error_message,
+                escalation_reason,
+                revision_stale_message: "job failure does not match the current item revision",
+                activities,
             })
-            .await?;
-    }
-
-    let event_type = if outcome_class == OutcomeClass::Cancelled {
-        ActivityEventType::JobCancelled
-    } else {
-        ActivityEventType::JobFailed
-    };
-    activity_repo
-        .append(&Activity {
-            id: ActivityId::new(),
-            project_id: job.project_id,
-            event_type,
-            subject: ActivitySubject::Job(job.id),
-            payload: serde_json::json!({ "item_id": item.id, "error_code": error_code }),
-            created_at: Utc::now(),
-        })
-        .await?;
-
-    Ok(JobTerminationResult {
-        job_id: job.id,
-        project_id: job.project_id,
-        item_id: item.id,
-        revision_id: job.item_revision_id,
-        released_workspace_id,
-        escalation_reason,
-    })
+        },
+    )
+    .await
 }
 
 /// Expire an active job. Sets status to Expired with TransientFailure outcome.
@@ -201,28 +165,66 @@ where
     W: WorkspaceRepository,
     A: ActivityRepository,
 {
+    terminate_non_success_job(
+        job_repo,
+        workspace_repo,
+        activity_repo,
+        job,
+        item,
+        target_workspace_status,
+        || {
+            Ok(NonSuccessTermination {
+                status: JobStatus::Expired,
+                outcome_class: Some(OutcomeClass::TransientFailure),
+                error_code: Some("job_expired".into()),
+                error_message: None,
+                escalation_reason: None,
+                revision_stale_message: "job expiration does not match the current item revision",
+                activities: vec![TerminationActivity {
+                    event_type: ActivityEventType::JobFailed,
+                    subject: ActivitySubject::Job(job.id),
+                    payload: serde_json::json!({ "item_id": item.id, "error_code": "job_expired" }),
+                }],
+            })
+        },
+    )
+    .await
+}
+
+async fn terminate_non_success_job<J, W, A>(
+    job_repo: &J,
+    workspace_repo: &W,
+    activity_repo: &A,
+    job: &Job,
+    item: &Item,
+    target_workspace_status: WorkspaceStatus,
+    build_termination: impl FnOnce() -> Result<NonSuccessTermination, UseCaseError>,
+) -> Result<JobTerminationResult, UseCaseError>
+where
+    J: JobRepository,
+    W: WorkspaceRepository,
+    A: ActivityRepository,
+{
     if !job.state.is_active() {
         return Err(UseCaseError::JobNotActive);
     }
+    let termination = build_termination()?;
+
+    let escalation_reason = termination.escalation_reason;
 
     job_repo
         .finish_non_success(FinishJobNonSuccessParams {
             job_id: job.id,
             item_id: item.id,
             expected_item_revision_id: job.item_revision_id,
-            status: JobStatus::Expired,
-            outcome_class: Some(OutcomeClass::TransientFailure),
-            error_code: Some("job_expired".into()),
-            error_message: None,
-            escalation_reason: None,
+            status: termination.status,
+            outcome_class: termination.outcome_class,
+            error_code: termination.error_code,
+            error_message: termination.error_message,
+            escalation_reason,
         })
         .await
-        .map_err(|error| {
-            map_finish_non_success_error(
-                error,
-                "job expiration does not match the current item revision",
-            )
-        })?;
+        .map_err(|error| map_finish_non_success_error(error, termination.revision_stale_message))?;
 
     let released_workspace_id = release_workspace(
         workspace_repo,
@@ -231,16 +233,18 @@ where
     )
     .await?;
 
-    activity_repo
-        .append(&Activity {
-            id: ActivityId::new(),
-            project_id: job.project_id,
-            event_type: ActivityEventType::JobFailed,
-            subject: ActivitySubject::Job(job.id),
-            payload: serde_json::json!({ "item_id": item.id, "error_code": "job_expired" }),
-            created_at: Utc::now(),
-        })
-        .await?;
+    for activity in termination.activities {
+        activity_repo
+            .append(&Activity {
+                id: ActivityId::new(),
+                project_id: job.project_id,
+                event_type: activity.event_type,
+                subject: activity.subject,
+                payload: activity.payload,
+                created_at: Utc::now(),
+            })
+            .await?;
+    }
 
     Ok(JobTerminationResult {
         job_id: job.id,
@@ -248,7 +252,7 @@ where
         item_id: item.id,
         revision_id: job.item_revision_id,
         released_workspace_id,
-        escalation_reason: None,
+        escalation_reason,
     })
 }
 

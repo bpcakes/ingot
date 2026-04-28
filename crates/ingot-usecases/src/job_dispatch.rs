@@ -2,10 +2,10 @@ use ingot_domain::convergence::Convergence;
 use ingot_domain::finding::Finding;
 use ingot_domain::ids::JobId;
 use ingot_domain::item::{Item, ParkingState};
-use ingot_domain::job::{Job, JobInput, OutcomeClass};
+use ingot_domain::job::{Job, JobInput, JobState, OutcomeClass};
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
-use ingot_workflow::{Evaluation, Evaluator, step};
+use ingot_workflow::{Evaluation, Evaluator, StepContract, step};
 
 use crate::UseCaseError;
 use crate::authoring_history::{
@@ -44,25 +44,16 @@ pub fn dispatch_job(
     let job_input = job_input_for_step(step_id, revision, jobs, convergences);
     let semantic_attempt_no = next_semantic_attempt_no(jobs, item.current_revision_id, step_id);
 
-    Ok(Job {
-        id: JobId::new(),
-        project_id: item.project_id,
-        item_id: item.id,
-        item_revision_id: item.current_revision_id,
+    let job_spec = QueuedJobSpec {
         step_id,
         semantic_attempt_no,
         retry_no: 0,
         supersedes_job_id: None,
-        phase_kind: contract.phase_kind,
-        workspace_kind: contract.workspace_kind,
-        execution_permission: contract.execution_permission,
-        context_policy: contract.context_policy,
         phase_template_slug: template_slug,
         job_input,
-        output_artifact_kind: contract.output_artifact_kind,
-        created_at: chrono::Utc::now(),
-        state: ingot_domain::job::JobState::Queued,
-    })
+    };
+
+    Ok(queued_job(item, contract, job_spec))
 }
 
 pub fn retry_job(
@@ -137,25 +128,47 @@ pub fn retry_job(
         .unwrap_or(previous_job.retry_no)
         + 1;
 
-    Ok(Job {
-        id: JobId::new(),
-        project_id: item.project_id,
-        item_id: item.id,
-        item_revision_id: item.current_revision_id,
+    let job_spec = QueuedJobSpec {
         step_id: previous_job.step_id,
         semantic_attempt_no: previous_job.semantic_attempt_no,
         retry_no,
         supersedes_job_id: Some(previous_job.id),
+        phase_template_slug: template_slug,
+        job_input,
+    };
+
+    Ok(queued_job(item, contract, job_spec))
+}
+
+struct QueuedJobSpec {
+    step_id: StepId,
+    semantic_attempt_no: u32,
+    retry_no: u32,
+    supersedes_job_id: Option<JobId>,
+    phase_template_slug: String,
+    job_input: JobInput,
+}
+
+fn queued_job(item: &Item, contract: &StepContract, spec: QueuedJobSpec) -> Job {
+    Job {
+        id: JobId::new(),
+        project_id: item.project_id,
+        item_id: item.id,
+        item_revision_id: item.current_revision_id,
+        step_id: spec.step_id,
+        semantic_attempt_no: spec.semantic_attempt_no,
+        retry_no: spec.retry_no,
+        supersedes_job_id: spec.supersedes_job_id,
         phase_kind: contract.phase_kind,
         workspace_kind: contract.workspace_kind,
         execution_permission: contract.execution_permission,
         context_policy: contract.context_policy,
-        phase_template_slug: template_slug,
-        job_input,
+        phase_template_slug: spec.phase_template_slug,
+        job_input: spec.job_input,
         output_artifact_kind: contract.output_artifact_kind,
         created_at: chrono::Utc::now(),
-        state: ingot_domain::job::JobState::Queued,
-    })
+        state: JobState::Queued,
+    }
 }
 
 fn select_dispatch_step(
