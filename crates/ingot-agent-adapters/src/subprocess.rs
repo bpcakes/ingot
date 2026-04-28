@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use ingot_agent_protocol::adapter::AgentError;
 use ingot_agent_protocol::request::AgentRequest;
 use ingot_agent_protocol::response::{
-    AgentOutputChunk, AgentOutputSegmentDraft, AgentResponse, OutputStream,
+    AgentOutputChunk, AgentOutputKind, AgentOutputSegmentDraft, AgentResponse, OutputStream,
 };
 use ingot_domain::agent_model::AgentModel;
 use tokio::fs;
@@ -131,6 +131,24 @@ pub(crate) struct AdapterLaunch<'a, Model: ?Sized> {
 
 pub(crate) trait StdoutOutputParser: Send + 'static {
     fn parse_line(&mut self, line: &str) -> Vec<AgentOutputSegmentDraft>;
+}
+
+pub(crate) fn parse_json_stdout_line(
+    line: &str,
+    parse_value: impl FnOnce(&serde_json::Value) -> Vec<AgentOutputSegmentDraft>,
+) -> Vec<AgentOutputSegmentDraft> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => parse_value(&value),
+        Err(_) => vec![AgentOutputSegmentDraft::text(
+            AgentOutputKind::Text,
+            trimmed,
+        )],
+    }
 }
 
 /// Spawn a CLI subprocess, pipe the prompt to stdin, collect stdout/stderr,
@@ -396,6 +414,41 @@ pub(crate) async fn cancel_process_group(pid: u32) -> Result<(), AgentError> {
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn json_stdout_line_parser_skips_empty_lines() {
+        let segments = parse_json_stdout_line(" \t ", |_| panic!("empty lines should not parse"));
+
+        assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn json_stdout_line_parser_treats_invalid_json_as_text() {
+        let segments = parse_json_stdout_line(" plain text ", |_| Vec::new());
+
+        let [segment] = segments.as_slice() else {
+            panic!("expected one fallback text segment, got {segments:?}");
+        };
+
+        assert_eq!(segment.kind, AgentOutputKind::Text);
+        assert_eq!(segment.text.as_deref(), Some("plain text"));
+    }
+
+    #[test]
+    fn json_stdout_line_parser_delegates_json_values() {
+        let segments = parse_json_stdout_line(r#" {"type":"message","text":"hello"} "#, |value| {
+            vec![AgentOutputSegmentDraft::text(
+                AgentOutputKind::Text,
+                value["text"].as_str().expect("text"),
+            )]
+        });
+
+        let [segment] = segments.as_slice() else {
+            panic!("expected one parsed text segment, got {segments:?}");
+        };
+
+        assert_eq!(segment.text.as_deref(), Some("hello"));
+    }
 
     #[tokio::test]
     async fn stderr_stream_emits_labeled_diagnostic_segments() {

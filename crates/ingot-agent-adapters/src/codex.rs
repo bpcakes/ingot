@@ -100,22 +100,7 @@ struct CodexJsonOutputParser;
 
 impl subprocess::StdoutOutputParser for CodexJsonOutputParser {
     fn parse_line(&mut self, line: &str) -> Vec<AgentOutputSegmentDraft> {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Vec::new();
-        }
-
-        let value = match serde_json::from_str::<serde_json::Value>(trimmed) {
-            Ok(value) => value,
-            Err(_) => {
-                return vec![AgentOutputSegmentDraft::text(
-                    AgentOutputKind::Text,
-                    trimmed,
-                )];
-            }
-        };
-
-        parse_codex_event(&value)
+        subprocess::parse_json_stdout_line(line, parse_codex_event)
     }
 }
 

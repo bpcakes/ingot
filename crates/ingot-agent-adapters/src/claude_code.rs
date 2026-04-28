@@ -78,22 +78,7 @@ struct ClaudeStreamJsonParser;
 
 impl subprocess::StdoutOutputParser for ClaudeStreamJsonParser {
     fn parse_line(&mut self, line: &str) -> Vec<AgentOutputSegmentDraft> {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Vec::new();
-        }
-
-        let value = match serde_json::from_str::<serde_json::Value>(trimmed) {
-            Ok(value) => value,
-            Err(_) => {
-                return vec![AgentOutputSegmentDraft::text(
-                    AgentOutputKind::Text,
-                    trimmed,
-                )];
-            }
-        };
-
-        parse_claude_stream_event(&value)
+        subprocess::parse_json_stdout_line(line, parse_claude_stream_event)
     }
 }
 
