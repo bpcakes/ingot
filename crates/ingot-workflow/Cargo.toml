@@ -7,7 +7,6 @@ rust-version.workspace = true
 [dependencies]
 ingot-domain = { workspace = true }
 serde = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
