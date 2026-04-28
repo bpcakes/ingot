@@ -1,6 +1,5 @@
 use ingot_config::IngotConfig;
 
-use super::deps::*;
 use super::support::{
     config::load_effective_config,
     errors::{repo_to_internal, repo_to_project, repo_to_project_mutation, resolve_default_branch},
@@ -11,6 +10,21 @@ use super::support::{
     path::ApiPath,
 };
 use super::types::*;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::routing::{get, put};
+use axum::{Json, Router};
+use chrono::Utc;
+use ingot_domain::activity::Activity;
+use ingot_domain::ids::ProjectId;
+use ingot_domain::job::Job;
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_domain::project::Project;
+use ingot_domain::workspace::Workspace;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/projects", get(list_projects).post(create_project))

@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 // Shared runtime-test helpers are compiled into multiple test binaries, and each binary
 // intentionally uses only a subset of them.
@@ -6,7 +6,6 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 
 use ingot_agent_protocol::adapter::AgentError;
 use ingot_agent_protocol::request::AgentRequest;
@@ -16,6 +15,7 @@ use ingot_domain::agent::Agent;
 use ingot_domain::ids;
 use ingot_domain::job::{ExecutionPermission, Job, JobInput, OutputArtifactKind, PhaseKind};
 use ingot_domain::project::Project;
+#[allow(unused_imports)]
 pub use ingot_domain::test_support::{
     AgentBuilder, ConvergenceBuilder, ConvergenceQueueEntryBuilder, FindingBuilder,
     GitOperationBuilder, ItemBuilder, JobBuilder, ProjectBuilder, RevisionBuilder,
@@ -28,6 +28,7 @@ use ingot_test_support::git::unique_temp_path;
 use ingot_test_support::reports::{
     clean_review_report, clean_validation_report, findings_review_report,
 };
+#[allow(unused_imports)]
 pub use ingot_test_support::sqlite::migrated_test_db;
 #[allow(dead_code)]
 mod shared_harness {
@@ -39,6 +40,7 @@ mod shared_harness {
     ));
 }
 
+#[allow(unused_imports)]
 pub use shared_harness::{BlockingRunner, TestAgentProfile, TestHarness, agent_fixture};
 
 // ---------------------------------------------------------------------------
@@ -343,6 +345,7 @@ pub async fn create_mirror_only_commit(
     (worktree_path, commit_oid.into_inner())
 }
 
+#[allow(unused_imports)]
 pub use ingot_test_support::git::{git_output, run_git as git_sync, temp_git_repo};
 
 pub fn prompt_value(prompt: &str, label: &str) -> Option<String> {

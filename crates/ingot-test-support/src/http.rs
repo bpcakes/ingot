@@ -1,0 +1,403 @@
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use ingot_domain::convergence::Convergence;
+use ingot_domain::finding::Finding;
+use ingot_domain::ids::{ItemId, ItemRevisionId, JobId, ProjectId, WorkspaceId};
+use ingot_domain::item::Item;
+use ingot_domain::job::{
+    ContextPolicy, ExecutionPermission, JobInput, JobStatus, OutcomeClass, OutputArtifactKind,
+    PhaseKind,
+};
+use ingot_domain::project::Project;
+use ingot_domain::revision::{AuthoringBaseSeed, ItemRevision};
+use ingot_domain::test_support::{
+    ConvergenceBuilder, FindingBuilder, ItemBuilder, JobBuilder, ProjectBuilder, RevisionBuilder,
+    WorkspaceBuilder, default_timestamp, parse_timestamp,
+};
+use ingot_domain::workspace::{Workspace, WorkspaceKind, WorkspaceStatus};
+use ingot_store_sqlite::Database;
+
+use crate::git::temp_git_repo;
+use crate::sqlite::{PersistFixture, migrated_test_db};
+
+pub const ROUTE_TEST_TIMESTAMP: &str = ingot_domain::test_support::DEFAULT_TEST_TIMESTAMP;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestJobInput<'a> {
+    None,
+    AuthoringHead(&'a str),
+    CandidateSubject(&'a str, &'a str),
+    IntegratedSubject(&'a str, &'a str),
+}
+
+#[derive(Debug)]
+pub struct TestJobInsert<'a> {
+    pub id: &'a str,
+    pub project_id: &'a str,
+    pub item_id: &'a str,
+    pub item_revision_id: &'a str,
+    pub step_id: &'a str,
+    pub semantic_attempt_no: u32,
+    pub retry_no: u32,
+    pub supersedes_job_id: Option<&'a str>,
+    pub status: JobStatus,
+    pub outcome_class: Option<OutcomeClass>,
+    pub phase_kind: PhaseKind,
+    pub workspace_id: Option<&'a str>,
+    pub workspace_kind: WorkspaceKind,
+    pub execution_permission: ExecutionPermission,
+    pub context_policy: ContextPolicy,
+    pub phase_template_slug: &'a str,
+    pub output_artifact_kind: OutputArtifactKind,
+    pub job_input: TestJobInput<'a>,
+    pub output_commit_oid: Option<&'a str>,
+    pub result_schema_version: Option<&'a str>,
+    pub result_payload: Option<serde_json::Value>,
+    pub error_code: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+    pub created_at: &'a str,
+    pub started_at: Option<&'a str>,
+    pub ended_at: Option<&'a str>,
+}
+
+impl<'a> TestJobInsert<'a> {
+    pub fn new(
+        id: &'a str,
+        project_id: &'a str,
+        item_id: &'a str,
+        item_revision_id: &'a str,
+        step_id: &'a str,
+    ) -> Self {
+        Self {
+            id,
+            project_id,
+            item_id,
+            item_revision_id,
+            step_id,
+            semantic_attempt_no: 1,
+            retry_no: 0,
+            supersedes_job_id: None,
+            status: JobStatus::Queued,
+            outcome_class: None,
+            phase_kind: PhaseKind::Author,
+            workspace_id: None,
+            workspace_kind: WorkspaceKind::Authoring,
+            execution_permission: ExecutionPermission::MayMutate,
+            context_policy: ContextPolicy::Fresh,
+            phase_template_slug: "template",
+            output_artifact_kind: OutputArtifactKind::None,
+            job_input: TestJobInput::None,
+            output_commit_oid: None,
+            result_schema_version: None,
+            result_payload: None,
+            error_code: None,
+            error_message: None,
+            created_at: ROUTE_TEST_TIMESTAMP,
+            started_at: None,
+            ended_at: None,
+        }
+    }
+}
+
+pub fn parse_id<T: FromStr>(value: &str) -> T {
+    value
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid test id: {value}"))
+}
+
+pub fn test_project_builder(path: impl AsRef<Path>, id: &str) -> ProjectBuilder {
+    ProjectBuilder::new(path)
+        .id(parse_id::<ProjectId>(id))
+        .created_at(default_timestamp())
+}
+
+pub fn test_item_builder(project_id: &str, revision_id: &str, item_id: &str) -> ItemBuilder {
+    ItemBuilder::new(
+        parse_id::<ProjectId>(project_id),
+        parse_id::<ItemRevisionId>(revision_id),
+    )
+    .id(parse_id::<ItemId>(item_id))
+    .created_at(default_timestamp())
+}
+
+pub fn test_revision_builder(item_id: &str, revision_id: &str) -> RevisionBuilder {
+    RevisionBuilder::new(parse_id::<ItemId>(item_id))
+        .id(parse_id::<ItemRevisionId>(revision_id))
+        .created_at(default_timestamp())
+}
+
+pub fn test_workspace_builder(
+    project_id: &str,
+    kind: WorkspaceKind,
+    workspace_id: &str,
+) -> WorkspaceBuilder {
+    WorkspaceBuilder::new(parse_id::<ProjectId>(project_id), kind)
+        .id(parse_id::<WorkspaceId>(workspace_id))
+        .created_at(default_timestamp())
+}
+
+pub fn test_convergence_builder(
+    project_id: &str,
+    item_id: &str,
+    revision_id: &str,
+    convergence_id: &str,
+) -> ConvergenceBuilder {
+    ConvergenceBuilder::new(
+        parse_id::<ProjectId>(project_id),
+        parse_id::<ItemId>(item_id),
+        parse_id::<ItemRevisionId>(revision_id),
+    )
+    .id(parse_id(convergence_id))
+    .created_at(default_timestamp())
+}
+
+pub fn test_finding_builder(
+    project_id: &str,
+    item_id: &str,
+    revision_id: &str,
+    job_id: &str,
+    finding_id: &str,
+) -> FindingBuilder {
+    FindingBuilder::new(
+        parse_id::<ProjectId>(project_id),
+        parse_id::<ItemId>(item_id),
+        parse_id::<ItemRevisionId>(revision_id),
+        parse_id::<JobId>(job_id),
+    )
+    .id(parse_id(finding_id))
+    .created_at(default_timestamp())
+}
+
+pub async fn persist_test_project(
+    db: &Database,
+    path: impl AsRef<Path>,
+    project_id: &str,
+) -> Project {
+    test_project_builder(path, project_id)
+        .name("Test")
+        .build()
+        .persist(db)
+        .await
+        .expect("persist test project")
+}
+
+pub async fn persist_test_change(
+    db: &Database,
+    path: impl AsRef<Path>,
+    project_id: &str,
+    item_id: &str,
+    revision_id: &str,
+    configure_item: impl FnOnce(ItemBuilder) -> ItemBuilder,
+    configure_revision: impl FnOnce(RevisionBuilder) -> RevisionBuilder,
+) -> (Project, Item, ItemRevision) {
+    let project = persist_test_project(db, path, project_id).await;
+    let revision = configure_revision(test_revision_builder(item_id, revision_id)).build();
+    let item = configure_item(test_item_builder(project_id, revision_id, item_id)).build();
+    let (item, revision) = (item, revision)
+        .persist(db)
+        .await
+        .expect("persist test item with revision");
+    (project, item, revision)
+}
+
+pub async fn persist_test_workspace(
+    db: &Database,
+    project_id: &str,
+    kind: WorkspaceKind,
+    workspace_id: &str,
+    configure_workspace: impl FnOnce(WorkspaceBuilder) -> WorkspaceBuilder,
+) -> Workspace {
+    configure_workspace(test_workspace_builder(project_id, kind, workspace_id))
+        .build()
+        .persist(db)
+        .await
+        .expect("persist test workspace")
+}
+
+pub async fn persist_test_convergence(
+    db: &Database,
+    project_id: &str,
+    item_id: &str,
+    revision_id: &str,
+    convergence_id: &str,
+    configure_convergence: impl FnOnce(ConvergenceBuilder) -> ConvergenceBuilder,
+) -> Convergence {
+    configure_convergence(test_convergence_builder(
+        project_id,
+        item_id,
+        revision_id,
+        convergence_id,
+    ))
+    .build()
+    .persist(db)
+    .await
+    .expect("persist test convergence")
+}
+
+pub async fn persist_test_finding(
+    db: &Database,
+    project_id: &str,
+    item_id: &str,
+    revision_id: &str,
+    job_id: &str,
+    finding_id: &str,
+    configure_finding: impl FnOnce(FindingBuilder) -> FindingBuilder,
+) -> Finding {
+    configure_finding(test_finding_builder(
+        project_id,
+        item_id,
+        revision_id,
+        job_id,
+        finding_id,
+    ))
+    .build()
+    .persist(db)
+    .await
+    .expect("persist test finding")
+}
+
+pub async fn insert_test_job_row(db: &Database, row: TestJobInsert<'_>) {
+    let workspace_id = row.workspace_id.map(parse_id::<WorkspaceId>).or_else(|| {
+        matches!(row.status, JobStatus::Assigned | JobStatus::Running).then(WorkspaceId::new)
+    });
+    let created_at = parse_timestamp(row.created_at);
+    let mut job = JobBuilder::new(
+        parse_id::<ProjectId>(row.project_id),
+        parse_id::<ItemId>(row.item_id),
+        parse_id::<ItemRevisionId>(row.item_revision_id),
+        row.step_id,
+    )
+    .id(parse_id::<JobId>(row.id))
+    .retry_no(row.retry_no)
+    .status(row.status)
+    .phase_kind(row.phase_kind)
+    .workspace_kind(row.workspace_kind)
+    .execution_permission(row.execution_permission)
+    .context_policy(row.context_policy)
+    .phase_template_slug(row.phase_template_slug)
+    .job_input(into_test_job_input(row.job_input))
+    .output_artifact_kind(row.output_artifact_kind)
+    .created_at(created_at);
+    if let Some(supersedes_job_id) = row.supersedes_job_id {
+        job = job.supersedes_job_id(parse_id::<JobId>(supersedes_job_id));
+    }
+    if let Some(workspace_id) = workspace_id {
+        job = job.workspace_id(workspace_id);
+    }
+    if let Some(outcome_class) = row.outcome_class {
+        job = job.outcome_class(outcome_class);
+    }
+    if let Some(output_commit_oid) = row.output_commit_oid {
+        job = job.output_commit_oid(output_commit_oid);
+    }
+    if let Some(result_schema_version) = row.result_schema_version {
+        job = job.result_schema_version(result_schema_version);
+    }
+    if let Some(result_payload) = row.result_payload {
+        job = job.result_payload(result_payload);
+    }
+    if let Some(error_code) = row.error_code {
+        job = job.error_code(error_code);
+    }
+    if let Some(error_message) = row.error_message {
+        job = job.error_message(error_message);
+    }
+    if let Some(started_at) = row.started_at {
+        job = job.started_at(parse_timestamp(started_at));
+    }
+    if let Some(ended_at) = row.ended_at {
+        job = job.ended_at(parse_timestamp(ended_at));
+    }
+    let mut job = job.build();
+    job.semantic_attempt_no = row.semantic_attempt_no;
+    job.persist(db).await.expect("insert test job");
+}
+
+pub async fn seeded_route_test_app() -> (PathBuf, Database, String, String, String) {
+    let repo = temp_git_repo("ingot-http-api");
+    let db = migrated_test_db("ingot-http-api-db").await;
+
+    let project_id = "prj_00000000000000000000000000000000".to_string();
+    let item_id = "itm_00000000000000000000000000000000".to_string();
+    let revision_id = "rev_00000000000000000000000000000000".to_string();
+    let job_id = "job_00000000000000000000000000000000".to_string();
+    let workspace_id = "wrk_00000000000000000000000000000000".to_string();
+
+    test_project_builder(&repo, &project_id)
+        .name("Test")
+        .build()
+        .persist(&db)
+        .await
+        .expect("insert project");
+
+    let revision = test_revision_builder(&item_id, &revision_id)
+        .seed(AuthoringBaseSeed::Explicit {
+            seed_commit_oid: "base".into(),
+            seed_target_commit_oid: "target".into(),
+        })
+        .build();
+    let item = test_item_builder(&project_id, &revision_id, &item_id).build();
+    (item, revision)
+        .persist(&db)
+        .await
+        .expect("insert item with revision");
+
+    test_workspace_builder(&project_id, WorkspaceKind::Authoring, &workspace_id)
+        .created_for_revision_id(parse_id::<ItemRevisionId>(&revision_id))
+        .status(WorkspaceStatus::Busy)
+        .current_job_id(parse_id::<JobId>(&job_id))
+        .base_commit_oid("base")
+        .head_commit_oid("head")
+        .path(repo.display().to_string())
+        .build()
+        .persist(&db)
+        .await
+        .expect("insert workspace");
+
+    insert_test_job_row(
+        &db,
+        TestJobInsert {
+            id: &job_id,
+            project_id: &project_id,
+            item_id: &item_id,
+            item_revision_id: &revision_id,
+            step_id: "validate_candidate_initial",
+            status: JobStatus::Running,
+            workspace_id: Some(&workspace_id),
+            phase_kind: PhaseKind::Validate,
+            workspace_kind: WorkspaceKind::Authoring,
+            execution_permission: ExecutionPermission::MustNotMutate,
+            context_policy: ContextPolicy::ResumeContext,
+            phase_template_slug: "validate-candidate",
+            output_artifact_kind: OutputArtifactKind::ValidationReport,
+            job_input: TestJobInput::CandidateSubject("base", "head"),
+            created_at: ROUTE_TEST_TIMESTAMP,
+            ..TestJobInsert::new(
+                &job_id,
+                &project_id,
+                &item_id,
+                &revision_id,
+                "validate_candidate_initial",
+            )
+        },
+    )
+    .await;
+
+    (repo, db, project_id, item_id, job_id)
+}
+
+fn into_test_job_input(input: TestJobInput<'_>) -> JobInput {
+    match input {
+        TestJobInput::None => JobInput::None,
+        TestJobInput::AuthoringHead(head_commit_oid) => {
+            JobInput::authoring_head(head_commit_oid.into())
+        }
+        TestJobInput::CandidateSubject(base_commit_oid, head_commit_oid) => {
+            JobInput::candidate_subject(base_commit_oid.into(), head_commit_oid.into())
+        }
+        TestJobInput::IntegratedSubject(base_commit_oid, head_commit_oid) => {
+            JobInput::integrated_subject(base_commit_oid.into(), head_commit_oid.into())
+        }
+    }
+}

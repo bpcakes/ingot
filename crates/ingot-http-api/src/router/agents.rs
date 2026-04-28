@@ -1,6 +1,16 @@
 use std::path::PathBuf;
 
-use super::deps::*;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post, put};
+use axum::{Json, Router};
+use ingot_agent_adapters::registry::{default_agent_capabilities, probe_and_apply};
+use ingot_domain::agent::{Agent, AgentStatus};
+use ingot_domain::ids::AgentId;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 use super::support::{
     errors::{repo_to_agent, repo_to_agent_mutation, repo_to_internal},
     normalize::{normalize_agent_slug, normalize_non_empty},

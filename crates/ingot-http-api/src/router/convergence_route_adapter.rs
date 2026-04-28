@@ -1,6 +1,12 @@
 use super::convergence_port::HttpConvergencePort;
-use super::deps::*;
+use ingot_domain::ids::{ItemId, ProjectId};
+use ingot_domain::revision::ItemRevision;
+use ingot_usecases::convergence::ConvergenceService;
 use ingot_usecases::convergence::RejectApprovalTeardown;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 #[derive(Clone)]
 pub(super) struct HttpConvergenceRouteAdapter {

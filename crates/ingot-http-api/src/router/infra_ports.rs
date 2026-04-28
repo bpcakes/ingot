@@ -395,6 +395,18 @@ impl DispatchInfraPort for HttpInfraAdapter {
             .await
             .map_err(api_to_uc)
     }
+
+    async fn ensure_authoring_workspace(
+        &self,
+        project_id: ProjectId,
+        revision: &ItemRevision,
+        job: &Job,
+        existing: Option<Workspace>,
+    ) -> Result<Workspace, UseCaseError> {
+        HttpInfraAdapter::ensure_authoring_workspace(self, project_id, revision, job, existing)
+            .await
+            .map_err(api_to_uc)
+    }
 }
 
 impl WorkspaceInfraPort for HttpInfraAdapter {

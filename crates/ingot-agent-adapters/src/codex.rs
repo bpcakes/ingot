@@ -9,6 +9,7 @@ use ingot_agent_protocol::response::{
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::segments::{MessageTextConfig, lifecycle_segment, message_text, provider_raw_fallback};
 use crate::{result_from_text, subprocess};
 
 #[derive(Debug, Clone)]
@@ -174,7 +175,7 @@ fn parse_codex_item_event(
                 .get("text")
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned)
-                .or_else(|| item.get("content").and_then(content_text));
+                .or_else(|| item.get("content").and_then(codex_message_text));
 
             if let Some(text) = text {
                 vec![AgentOutputSegmentDraft {
@@ -286,39 +287,15 @@ fn parse_codex_item_event(
     }
 }
 
-fn content_text(content: &serde_json::Value) -> Option<String> {
-    match content {
-        serde_json::Value::String(text) => Some(text.to_owned()),
-        serde_json::Value::Array(parts) => {
-            let joined = parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if joined.is_empty() {
-                None
-            } else {
-                Some(joined)
-            }
-        }
-        _ => None,
-    }
-}
-
-fn lifecycle_segment(
-    title: impl Into<String>,
-    text: Option<String>,
-    status: Option<AgentOutputStatus>,
-    data: serde_json::Value,
-) -> AgentOutputSegmentDraft {
-    AgentOutputSegmentDraft {
-        channel: AgentOutputChannel::Diagnostic,
-        kind: AgentOutputKind::Lifecycle,
-        status,
-        title: Some(title.into()),
-        text,
-        data: Some(data),
-    }
+fn codex_message_text(content: &serde_json::Value) -> Option<String> {
+    message_text(
+        content,
+        MessageTextConfig {
+            array_part_fields: &["text"],
+            object_text_field: None,
+            object_content_field: None,
+        },
+    )
 }
 
 fn raw_fallback(
@@ -326,18 +303,7 @@ fn raw_fallback(
     raw: serde_json::Value,
     text: Option<String>,
 ) -> AgentOutputSegmentDraft {
-    AgentOutputSegmentDraft {
-        channel: AgentOutputChannel::Diagnostic,
-        kind: AgentOutputKind::RawFallback,
-        status: Some(AgentOutputStatus::Unknown),
-        title: Some("Provider event".into()),
-        text,
-        data: Some(serde_json::json!({
-            "provider": "codex",
-            "provider_event_type": event_type,
-            "raw": raw
-        })),
-    }
+    provider_raw_fallback("codex", event_type, raw, text)
 }
 
 impl AgentAdapter for CodexCliAdapter {

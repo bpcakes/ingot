@@ -1,17 +1,31 @@
-use super::deps::*;
 use super::item_projection::{
     ItemRuntimeSnapshot, hydrate_convergence_validity, load_item_runtime_snapshot,
 };
 use super::support::errors::{api_to_usecase_error, repo_to_item, repo_to_project};
+use ingot_domain::activity::Activity;
+use ingot_domain::commit_oid::CommitOid;
+use ingot_domain::convergence::Convergence;
 use ingot_domain::convergence::ConvergenceStatus;
-use ingot_domain::ids::ItemRevisionId;
+use ingot_domain::convergence_queue::{ConvergenceQueueEntry, ConvergenceQueueEntryStatus};
+use ingot_domain::git_operation::GitOperation;
+use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId};
+use ingot_domain::item::Item;
+use ingot_domain::job::Job;
 use ingot_domain::ports::FinalizationMutation;
+use ingot_domain::project::Project;
+use ingot_domain::revision::ItemRevision;
+use ingot_domain::workspace::WorkspaceStatus;
 use ingot_git::commands::FinalizeTargetRefOutcome;
 use ingot_git::project_repo::CheckoutFinalizationStatus;
+use ingot_usecases::UseCaseError;
 use ingot_usecases::convergence::{
-    ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceQueuePrepareContext,
-    FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
+    ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceCommandPort,
+    ConvergenceQueuePrepareContext, ConvergenceSystemActionPort, FinalizeTargetRefResult,
+    PreparedConvergenceFinalizePort,
 };
+use tracing::warn;
+
+use super::app::{AppState, teardown_revision_lane_state};
 
 #[derive(Clone)]
 pub(super) struct HttpConvergencePort {

@@ -7,7 +7,6 @@ pub(super) use revisions::{
     build_superseding_revision, resolve_seed_target_commit_oid, validate_seed_commit_oid,
 };
 
-use super::deps::*;
 use super::dispatch::auto_dispatch_projected_review_job_locked;
 use super::item_projection::{
     evaluate_item_snapshot, load_item_detail, load_item_runtime_snapshot,
@@ -23,6 +22,34 @@ use super::support::{
     sort_key::next_project_sort_key,
 };
 use super::types::*;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use chrono::Utc;
+use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::commit_oid::CommitOid;
+use ingot_domain::finding::Finding;
+use ingot_domain::git_ref::GitRef;
+use ingot_domain::ids::{ItemId, ProjectId};
+use ingot_domain::item::{
+    ApprovalState, Classification, DoneReason, Escalation, Item, Lifecycle, Priority,
+    ResolutionSource,
+};
+use ingot_domain::job::Job;
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_domain::revision::{AuthoringBaseSeed, ItemRevision};
+use ingot_usecases::UseCaseError;
+use ingot_usecases::item::{
+    CreateInvestigationInput, CreateItemInput, approval_state_for_policy,
+    create_investigation_item, create_manual_item,
+};
+use ingot_workflow::Evaluator;
+use tracing::warn;
+
+use crate::error::ApiError;
+
+use super::app::{AppState, teardown_revision_lane_state};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -692,40 +719,6 @@ pub(super) async fn finish_item_manually(
     .await?;
     let detail = load_item_detail(&state, project_id, item.id).await?;
     Ok(Json(detail))
-}
-
-pub(super) async fn ensure_authoring_workspace(
-    state: &AppState,
-    project: &Project,
-    revision: &ItemRevision,
-    job: &Job,
-) -> Result<Workspace, ApiError> {
-    let infra = state.infra();
-    let existing = state
-        .db
-        .find_authoring_workspace_for_revision(revision.id)
-        .await
-        .map_err(repo_to_internal)?;
-    let workspace_exists = existing.is_some();
-    let workspace = infra
-        .ensure_authoring_workspace(project.id, revision, job, existing)
-        .await?;
-
-    if workspace_exists {
-        state
-            .db
-            .update_workspace(&workspace)
-            .await
-            .map_err(repo_to_internal)?;
-    } else {
-        state
-            .db
-            .create_workspace(&workspace)
-            .await
-            .map_err(repo_to_internal)?;
-    }
-
-    Ok(workspace)
 }
 
 pub(super) async fn current_authoring_head_for_revision_with_workspace(

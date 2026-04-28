@@ -1,7 +1,6 @@
 use ingot_usecases::finding::{BatchPromoteInput, batch_promote_findings};
 use ingot_usecases::item::next_sort_key_after;
 
-use super::deps::*;
 use super::dispatch::{
     auto_dispatch_projected_review_job_locked, dispatch_projected_item_job_locked,
 };
@@ -12,6 +11,28 @@ use super::support::{
     sort_key::next_project_sort_key,
 };
 use super::types::*;
+use axum::extract::State;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use chrono::Utc;
+use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::finding::{Finding, FindingTriageState};
+use ingot_domain::ids::{FindingId, ItemId};
+use ingot_domain::item::{ApprovalState, Item};
+use ingot_domain::ports::{ProjectMutationLockPort, RepositoryError};
+use ingot_domain::project::Project;
+use ingot_domain::revision::ItemRevision;
+use ingot_usecases::UseCaseError;
+use ingot_usecases::finding::{
+    BacklogFindingOverrides, TriageFindingInput, backlog_finding_with_promotion,
+    promotion_overrides_for_finding, triage_finding,
+};
+use ingot_workflow::step;
+use tracing::warn;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

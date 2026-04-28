@@ -1,5 +1,4 @@
 use super::convergence_route_adapter::HttpConvergenceRouteAdapter;
-use super::deps::*;
 use super::item_projection::load_item_detail;
 use super::items::build_superseding_revision;
 use super::support::{
@@ -8,6 +7,16 @@ use super::support::{
     path::ApiPath,
 };
 use super::types::*;
+use axum::extract::State;
+use axum::routing::post;
+use axum::{Json, Router};
+use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_usecases::UseCaseError;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

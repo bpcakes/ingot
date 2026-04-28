@@ -1,9 +1,18 @@
-use super::deps::*;
 use super::support::{
     errors::{ensure_workspace_not_busy, repo_to_internal, repo_to_project},
     path::ApiPath,
 };
 use super::types::*;
+use axum::extract::State;
+use axum::routing::post;
+use axum::{Json, Router};
+use ingot_domain::ids::{ProjectId, WorkspaceId};
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_domain::workspace::Workspace;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

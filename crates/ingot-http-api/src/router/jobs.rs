@@ -1,4 +1,3 @@
-use super::deps::*;
 use super::dispatch::auto_dispatch_projected_review_job;
 use super::items::{
     current_authoring_head_for_revision_with_workspace, effective_authoring_base_commit_oid,
@@ -10,8 +9,25 @@ use super::support::{
     path::ApiPath,
 };
 use super::types::*;
+use axum::extract::State;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use chrono::Utc;
+use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::ids::JobId;
+use ingot_domain::item::{ApprovalState, Item};
+use ingot_domain::job::{JobStatus, OutcomeClass};
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_domain::revision::ItemRevision;
+use ingot_domain::workspace::WorkspaceStatus;
 use ingot_usecases::dispatch::failure_status;
 use ingot_usecases::job_lifecycle;
+use ingot_usecases::{CompleteJobCommand, UseCaseError, rebuild_revision_context};
+use tracing::warn;
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()

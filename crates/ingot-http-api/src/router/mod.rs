@@ -4,7 +4,6 @@ mod convergence;
 mod convergence_port;
 mod convergence_route_adapter;
 mod core;
-mod deps;
 mod dispatch;
 mod findings;
 mod harness;

@@ -8,6 +8,7 @@ use ingot_agent_protocol::response::{
 };
 use tokio::sync::mpsc;
 
+use crate::segments::{MessageTextConfig, lifecycle_segment, message_text, provider_raw_fallback};
 use crate::{result_from_text, subprocess};
 
 #[derive(Debug, Clone)]
@@ -169,12 +170,9 @@ fn parse_claude_stream_event(value: &serde_json::Value) -> Vec<AgentOutputSegmen
                 "error_max_structured_output_retries" => AgentOutputStatus::Failed,
                 _ => AgentOutputStatus::Unknown,
             };
-            vec![AgentOutputSegmentDraft {
-                channel: AgentOutputChannel::Diagnostic,
-                kind: AgentOutputKind::Lifecycle,
-                status: Some(status),
-                title: Some("Claude result".into()),
-                text: value
+            vec![lifecycle_segment(
+                "Claude result",
+                value
                     .get("result")
                     .and_then(|value| value.as_str())
                     .map(ToOwned::to_owned)
@@ -185,13 +183,14 @@ fn parse_claude_stream_event(value: &serde_json::Value) -> Vec<AgentOutputSegmen
                             .map(ToOwned::to_owned)
                     })
                     .or_else(|| Some(subtype.replace('_', " "))),
-                data: Some(serde_json::json!({
+                Some(status),
+                serde_json::json!({
                     "provider": "claude",
                     "provider_event_type": event_type,
                     "provider_subtype": subtype,
                     "is_error": value.get("is_error").cloned()
-                })),
-            }]
+                }),
+            )]
         }
         _ => vec![claude_raw_fallback(
             event_type,
@@ -202,31 +201,14 @@ fn parse_claude_stream_event(value: &serde_json::Value) -> Vec<AgentOutputSegmen
 }
 
 fn claude_message_text(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(text) => Some(text.to_owned()),
-        serde_json::Value::Array(parts) => {
-            let joined = parts
-                .iter()
-                .filter_map(|part| {
-                    part.get("text")
-                        .and_then(|value| value.as_str())
-                        .or_else(|| part.get("content").and_then(|value| value.as_str()))
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if joined.is_empty() {
-                None
-            } else {
-                Some(joined)
-            }
-        }
-        serde_json::Value::Object(_) => value
-            .get("text")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned)
-            .or_else(|| value.get("content").and_then(claude_message_text)),
-        _ => None,
-    }
+    message_text(
+        value,
+        MessageTextConfig {
+            array_part_fields: &["text", "content"],
+            object_text_field: Some("text"),
+            object_content_field: Some("content"),
+        },
+    )
 }
 
 fn claude_raw_fallback(
@@ -234,18 +216,7 @@ fn claude_raw_fallback(
     raw: serde_json::Value,
     text: Option<String>,
 ) -> AgentOutputSegmentDraft {
-    AgentOutputSegmentDraft {
-        channel: AgentOutputChannel::Diagnostic,
-        kind: AgentOutputKind::RawFallback,
-        status: Some(AgentOutputStatus::Unknown),
-        title: Some("Provider event".into()),
-        text,
-        data: Some(serde_json::json!({
-            "provider": "claude",
-            "provider_event_type": event_type,
-            "raw": raw
-        })),
-    }
+    provider_raw_fallback("claude", event_type, raw, text)
 }
 
 impl AgentAdapter for ClaudeCodeCliAdapter {

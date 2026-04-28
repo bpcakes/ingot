@@ -1,7 +1,23 @@
-use super::deps::*;
 use super::support::errors::{repo_to_internal, repo_to_item, repo_to_project};
 use super::types::*;
+use ingot_domain::convergence::{CheckoutAdoptionState, Convergence, ConvergenceStatus};
+use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
+use ingot_domain::finding::Finding;
+use ingot_domain::ids::{ItemId, ProjectId};
+use ingot_domain::item::Item;
+use ingot_domain::job::Job;
+use ingot_domain::project::Project;
+use ingot_domain::revision::ItemRevision;
+use ingot_usecases::UseCaseError;
+use ingot_usecases::finding::parse_revision_context_summary;
 use ingot_workflow::BoardStatus;
+use ingot_workflow::{
+    AllowedAction, Evaluation, Evaluator, NamedRecommendedAction, PhaseStatus, RecommendedAction,
+};
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 
 pub(super) struct ItemRuntimeSnapshot {
     pub current_revision: ItemRevision,
@@ -193,9 +209,10 @@ async fn load_finalization_status(
         .iter()
         .filter(|convergence| convergence.item_revision_id == revision.id);
 
-    if let Some(convergence) = current_revision_convergences.clone().find(|convergence| {
-        convergence.state.status() == ingot_domain::convergence::ConvergenceStatus::Finalized
-    }) {
+    if let Some(convergence) = current_revision_convergences
+        .clone()
+        .find(|convergence| convergence.state.status() == ConvergenceStatus::Finalized)
+    {
         return Ok(FinalizationStatusResponse {
             phase: FinalizationPhaseResponse::TargetRefAdvanced,
             checkout_adoption_state: convergence.state.checkout_adoption_state(),
@@ -207,9 +224,9 @@ async fn load_finalization_status(
         });
     }
 
-    if let Some(convergence) = current_revision_convergences.find(|convergence| {
-        convergence.state.status() == ingot_domain::convergence::ConvergenceStatus::Prepared
-    }) {
+    if let Some(convergence) = current_revision_convergences
+        .find(|convergence| convergence.state.status() == ConvergenceStatus::Prepared)
+    {
         return Ok(FinalizationStatusResponse {
             phase: FinalizationPhaseResponse::ReadyToFinalize,
             checkout_adoption_state: None,
@@ -242,10 +259,7 @@ pub(super) fn overlay_evaluation_with_queue_state(
     let awaiting_checkout_sync = finalization.phase == FinalizationPhaseResponse::TargetRefAdvanced
         && matches!(
             finalization.checkout_adoption_state,
-            Some(
-                ingot_domain::convergence::CheckoutAdoptionState::Pending
-                    | ingot_domain::convergence::CheckoutAdoptionState::Blocked
-            )
+            Some(CheckoutAdoptionState::Pending | CheckoutAdoptionState::Blocked)
         );
     if awaiting_checkout_sync {
         evaluation.next_recommended_action =
