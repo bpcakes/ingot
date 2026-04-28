@@ -288,6 +288,50 @@ fn non_blocking_triaged_findings_follow_clean_edge() {
 }
 
 #[test]
+fn evaluation_uses_only_current_revision_workflow_records() {
+    let evaluator = Evaluator::new();
+    let item = nil_item();
+    let revision = test_revision(ApprovalPolicy::Required);
+    let stale_revision_id = ItemRevisionId::from_uuid(Uuid::from_u128(1));
+    let current_job = test_job(
+        StepId::ReviewCandidateInitial,
+        PhaseKind::Review,
+        JobStatus::Completed,
+        Some(OutcomeClass::Findings),
+    );
+    let findings = vec![
+        test_finding_for_revision(
+            stale_revision_id,
+            &current_job,
+            FindingTriageState::Untriaged,
+        ),
+        test_finding(&current_job, FindingTriageState::WontFix),
+    ];
+    let jobs = vec![
+        test_job_for_revision(
+            stale_revision_id,
+            StepId::InvestigateItem,
+            PhaseKind::Investigate,
+            JobStatus::Running,
+            None,
+        ),
+        current_job,
+    ];
+    let convergences = vec![test_prepared_convergence_for_revision(
+        stale_revision_id,
+        false,
+    )];
+
+    let evaluation = evaluator.evaluate(&item, &revision, &jobs, &findings, &convergences);
+
+    assert_eq!(evaluation.phase_status, Some(PhaseStatus::Idle));
+    assert_eq!(
+        evaluation.dispatchable_step_id.map(StepId::as_str),
+        Some(StepId::ValidateCandidateInitial.as_str())
+    );
+}
+
+#[test]
 fn post_integration_repairs_reenter_incremental_review() {
     let evaluator = Evaluator::new();
     let item = nil_item();
@@ -393,6 +437,22 @@ fn test_job(
     status: JobStatus,
     outcome_class: Option<OutcomeClass>,
 ) -> Job {
+    test_job_for_revision(
+        ItemRevisionId::from_uuid(Uuid::nil()),
+        step_id,
+        phase_kind,
+        status,
+        outcome_class,
+    )
+}
+
+fn test_job_for_revision(
+    revision_id: ItemRevisionId,
+    step_id: StepId,
+    phase_kind: PhaseKind,
+    status: JobStatus,
+    outcome_class: Option<OutcomeClass>,
+) -> Job {
     let nil = Uuid::nil();
     let output_artifact_kind = match step_id {
         StepId::InvestigateItem => OutputArtifactKind::FindingReport,
@@ -411,7 +471,7 @@ fn test_job(
     let mut builder = JobBuilder::new(
         ProjectId::from_uuid(nil),
         ItemId::from_uuid(nil),
-        ItemRevisionId::from_uuid(nil),
+        revision_id,
         step_id,
     )
     .status(status)
@@ -427,10 +487,20 @@ fn test_job(
 }
 
 fn test_prepared_convergence(target_head_valid: bool) -> ingot_domain::convergence::Convergence {
+    test_prepared_convergence_for_revision(
+        ItemRevisionId::from_uuid(Uuid::nil()),
+        target_head_valid,
+    )
+}
+
+fn test_prepared_convergence_for_revision(
+    revision_id: ItemRevisionId,
+    target_head_valid: bool,
+) -> ingot_domain::convergence::Convergence {
     ConvergenceBuilder::new(
         ProjectId::from_uuid(Uuid::nil()),
         ItemId::from_uuid(Uuid::nil()),
-        ItemRevisionId::from_uuid(Uuid::nil()),
+        revision_id,
     )
     .target_head_valid(target_head_valid)
     .build()
@@ -456,10 +526,18 @@ fn investigation_item() -> ingot_domain::item::Item {
 }
 
 fn test_finding(job: &Job, triage_state: FindingTriageState) -> ingot_domain::finding::Finding {
+    test_finding_for_revision(ItemRevisionId::from_uuid(Uuid::nil()), job, triage_state)
+}
+
+fn test_finding_for_revision(
+    revision_id: ItemRevisionId,
+    job: &Job,
+    triage_state: FindingTriageState,
+) -> ingot_domain::finding::Finding {
     let mut builder = FindingBuilder::new(
         ProjectId::from_uuid(Uuid::nil()),
         ItemId::from_uuid(Uuid::nil()),
-        ItemRevisionId::from_uuid(Uuid::nil()),
+        revision_id,
         job.id,
     )
     .source_step_id(job.step_id)

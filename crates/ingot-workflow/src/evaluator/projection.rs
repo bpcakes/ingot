@@ -21,7 +21,7 @@ pub(super) struct IdleProjection {
     pub(super) terminal_readiness: bool,
 }
 
-pub(super) fn latest_closure_terminal_job<'a>(jobs: &'a [&'a Job]) -> Option<&'a Job> {
+pub(super) fn latest_closure_terminal_job<'a>(jobs: &[&'a Job]) -> Option<&'a Job> {
     jobs.iter()
         .copied()
         .filter(|job| is_terminal_closure_job(job))

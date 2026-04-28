@@ -105,6 +105,77 @@ impl Evaluation {
     }
 }
 
+#[derive(Debug)]
+struct RevisionWorkflowSlice<'a> {
+    jobs: Vec<&'a Job>,
+    findings: Vec<&'a Finding>,
+    convergences: Vec<&'a Convergence>,
+}
+
+impl<'a> RevisionWorkflowSlice<'a> {
+    fn for_current_revision(
+        item: &Item,
+        jobs: &'a [Job],
+        findings: &'a [Finding],
+        convergences: &'a [Convergence],
+    ) -> Self {
+        let revision_id = item.current_revision_id;
+
+        Self {
+            jobs: jobs
+                .iter()
+                .filter(|job| job.item_revision_id == revision_id)
+                .collect(),
+            findings: findings
+                .iter()
+                .filter(|finding| finding.source_item_revision_id == revision_id)
+                .collect(),
+            convergences: convergences
+                .iter()
+                .filter(|conv| conv.item_revision_id == revision_id)
+                .collect(),
+        }
+    }
+
+    fn findings(&self) -> &[&'a Finding] {
+        &self.findings
+    }
+
+    fn active_job(&self) -> Option<&'a Job> {
+        self.jobs.iter().copied().find(|job| job.state.is_active())
+    }
+
+    fn active_convergence(&self) -> Option<&'a Convergence> {
+        self.convergences.iter().copied().find(|conv| {
+            matches!(
+                conv.state.status(),
+                ConvergenceStatus::Queued | ConvergenceStatus::Running
+            )
+        })
+    }
+
+    fn prepared_convergence(&self) -> Option<&'a Convergence> {
+        self.convergences
+            .iter()
+            .copied()
+            .find(|conv| conv.state.status() == ConvergenceStatus::Prepared)
+    }
+
+    fn awaiting_checkout_sync(&self) -> Option<&'a Convergence> {
+        self.convergences.iter().copied().find(|conv| {
+            conv.state.status() == ConvergenceStatus::Finalized
+                && matches!(
+                    conv.state.checkout_adoption_state(),
+                    Some(CheckoutAdoptionState::Pending | CheckoutAdoptionState::Blocked)
+                )
+        })
+    }
+
+    fn latest_closure_job(&self) -> Option<&'a Job> {
+        latest_closure_terminal_job(&self.jobs)
+    }
+}
+
 pub struct Evaluator {
     delivery_graph: WorkflowGraph,
     investigation_graph: WorkflowGraph,
@@ -152,54 +223,25 @@ impl Evaluator {
             };
         }
 
+        let slice = RevisionWorkflowSlice::for_current_revision(item, jobs, findings, convergences);
+
         if item.workflow_version == WorkflowVersion::InvestigationV1 {
             return investigation::evaluate_investigation(
                 &self.investigation_graph,
                 item,
                 revision,
-                jobs,
-                findings,
+                &slice,
                 attention_badges,
                 diagnostics,
             );
         }
 
-        let current_revision_jobs: Vec<&Job> = jobs
-            .iter()
-            .filter(|job| job.item_revision_id == item.current_revision_id)
-            .collect();
-        let current_revision_findings: Vec<&Finding> = findings
-            .iter()
-            .filter(|finding| finding.source_item_revision_id == item.current_revision_id)
-            .collect();
-        let current_revision_convergences: Vec<&Convergence> = convergences
-            .iter()
-            .filter(|conv| conv.item_revision_id == item.current_revision_id)
-            .collect();
+        let active_job = slice.active_job();
+        let active_convergence = slice.active_convergence();
+        let prepared_convergence = slice.prepared_convergence();
+        let awaiting_checkout_sync = slice.awaiting_checkout_sync();
 
-        let active_job = current_revision_jobs
-            .iter()
-            .copied()
-            .find(|job| job.state.is_active());
-        let active_convergence = current_revision_convergences.iter().copied().find(|conv| {
-            matches!(
-                conv.state.status(),
-                ConvergenceStatus::Queued | ConvergenceStatus::Running
-            )
-        });
-        let prepared_convergence = current_revision_convergences
-            .iter()
-            .copied()
-            .find(|conv| conv.state.status() == ConvergenceStatus::Prepared);
-        let awaiting_checkout_sync = current_revision_convergences.iter().copied().find(|conv| {
-            conv.state.status() == ConvergenceStatus::Finalized
-                && matches!(
-                    conv.state.checkout_adoption_state(),
-                    Some(CheckoutAdoptionState::Pending | CheckoutAdoptionState::Blocked)
-                )
-        });
-
-        let latest_closure_job = latest_closure_terminal_job(&current_revision_jobs);
+        let latest_closure_job = slice.latest_closure_job();
         let has_terminal_closure_job = latest_closure_job.is_some();
 
         if awaiting_checkout_sync.is_some() {
@@ -231,7 +273,7 @@ impl Evaluator {
                     item,
                     revision,
                     latest_closure_job,
-                    &current_revision_findings,
+                    slice.findings(),
                     prepared_convergence,
                     &mut diagnostics,
                 );
@@ -292,7 +334,7 @@ impl Evaluator {
             item,
             revision,
             latest_closure_job,
-            &current_revision_findings,
+            slice.findings(),
             prepared_convergence,
             &mut diagnostics,
         );

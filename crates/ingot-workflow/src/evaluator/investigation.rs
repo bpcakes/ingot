@@ -1,6 +1,6 @@
-use ingot_domain::finding::{Finding, FindingTriageState};
+use ingot_domain::finding::FindingTriageState;
 use ingot_domain::item::{Item, ParkingState};
-use ingot_domain::job::{Job, OutcomeClass};
+use ingot_domain::job::OutcomeClass;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
 
@@ -8,33 +8,20 @@ use crate::graph::{TransitionTarget, WorkflowGraph};
 use crate::recommended_action::{NamedRecommendedAction, RecommendedAction};
 use crate::step;
 
-use super::projection::latest_closure_terminal_job;
-use super::{AllowedAction, AttentionBadge, BoardStatus, Evaluation, PhaseStatus};
+use super::{
+    AllowedAction, AttentionBadge, BoardStatus, Evaluation, PhaseStatus, RevisionWorkflowSlice,
+};
 
 pub(super) fn evaluate_investigation(
     graph: &WorkflowGraph,
     item: &Item,
     _revision: &ItemRevision,
-    jobs: &[Job],
-    findings: &[Finding],
+    slice: &RevisionWorkflowSlice<'_>,
     attention_badges: Vec<AttentionBadge>,
     mut diagnostics: Vec<String>,
 ) -> Evaluation {
-    let current_revision_jobs: Vec<&Job> = jobs
-        .iter()
-        .filter(|job| job.item_revision_id == item.current_revision_id)
-        .collect();
-    let current_revision_findings: Vec<&Finding> = findings
-        .iter()
-        .filter(|finding| finding.source_item_revision_id == item.current_revision_id)
-        .collect();
-
-    let active_job = current_revision_jobs
-        .iter()
-        .copied()
-        .find(|job| job.state.is_active());
-
-    let latest_closure_job = latest_closure_terminal_job(&current_revision_jobs);
+    let active_job = slice.active_job();
+    let latest_closure_job = slice.latest_closure_job();
 
     if item.escalation.is_escalated() {
         return finish(
@@ -125,11 +112,12 @@ pub(super) fn evaluate_investigation(
     }
 
     if outcome == OutcomeClass::Findings {
-        let job_findings: Vec<&Finding> = current_revision_findings
+        let job_findings = slice
+            .findings()
             .iter()
             .copied()
             .filter(|finding| finding.source_job_id == last_job.id)
-            .collect();
+            .collect::<Vec<_>>();
 
         if job_findings
             .iter()
