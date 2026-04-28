@@ -1,10 +1,10 @@
-use ingot_domain::finding::Finding;
+use ingot_domain::finding::{Finding, FindingTriageState};
 use ingot_domain::item::{Item, ParkingState};
 use ingot_domain::job::{Job, OutcomeClass};
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
 
-use crate::graph::WorkflowGraph;
+use crate::graph::{TransitionTarget, WorkflowGraph};
 use crate::recommended_action::{NamedRecommendedAction, RecommendedAction};
 use crate::step;
 
@@ -41,24 +41,17 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: latest_closure_job.map(|j| j.step_id),
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Escalated),
                 next_recommended_action: RecommendedAction::named(
                     NamedRecommendedAction::OperatorIntervention,
                 ),
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
                 allowed_actions: vec![
                     AllowedAction::Revise,
                     AllowedAction::Dismiss,
                     AllowedAction::Invalidate,
                     AllowedAction::Defer,
                 ],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Escalated, diagnostics)
             },
         );
     }
@@ -68,17 +61,9 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Inbox,
-                attention_badges: vec![],
                 current_step_id: latest_closure_job.map(|j| j.step_id),
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Deferred),
-                next_recommended_action: RecommendedAction::None,
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
                 allowed_actions: vec![AllowedAction::Resume],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Inbox, PhaseStatus::Deferred, diagnostics)
             },
         );
     }
@@ -88,17 +73,10 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: Some(job.step_id),
                 current_phase_kind: Some(job.phase_kind),
-                phase_status: Some(PhaseStatus::Running),
-                next_recommended_action: RecommendedAction::None,
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
                 allowed_actions: vec![AllowedAction::CancelJob],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Running, diagnostics)
             },
         );
     }
@@ -108,17 +86,10 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Inbox,
-                attention_badges: vec![],
-                current_step_id: None,
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::New),
                 next_recommended_action: RecommendedAction::dispatch(StepId::InvestigateProject),
                 dispatchable_step_id: Some(StepId::InvestigateProject),
-                auxiliary_dispatchable_step_ids: vec![],
                 allowed_actions: vec![AllowedAction::Dispatch],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Inbox, PhaseStatus::New, diagnostics)
             },
         );
     };
@@ -132,19 +103,11 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: Some(last_job.step_id),
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Unknown),
                 next_recommended_action: RecommendedAction::named(
                     NamedRecommendedAction::OperatorIntervention,
                 ),
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
-                allowed_actions: vec![],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Unknown, diagnostics)
             },
         );
     };
@@ -154,80 +117,65 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: Some(last_job.step_id),
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Idle),
-                next_recommended_action: RecommendedAction::None,
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
-                allowed_actions: vec![],
                 terminal_readiness: true,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Idle, diagnostics)
             },
         );
     }
 
     if outcome == OutcomeClass::Findings {
-        let job_findings: Vec<&&Finding> = current_revision_findings
+        let job_findings: Vec<&Finding> = current_revision_findings
             .iter()
+            .copied()
             .filter(|finding| finding.source_job_id == last_job.id)
             .collect();
 
-        if job_findings.iter().any(|f| f.triage.is_unresolved()) {
+        if job_findings
+            .iter()
+            .any(|finding| finding.triage.is_unresolved())
+        {
             return finish(
                 item,
                 attention_badges,
                 Evaluation {
-                    board_status: BoardStatus::Working,
-                    attention_badges: vec![],
                     current_step_id: Some(last_job.step_id),
-                    current_phase_kind: None,
-                    phase_status: Some(PhaseStatus::Triaging),
                     next_recommended_action: RecommendedAction::named(
                         NamedRecommendedAction::TriageFindings,
                     ),
-                    dispatchable_step_id: None,
-                    auxiliary_dispatchable_step_ids: vec![],
-                    allowed_actions: vec![],
-                    terminal_readiness: false,
-                    diagnostics,
+                    ..Evaluation::for_status(
+                        BoardStatus::Working,
+                        PhaseStatus::Triaging,
+                        diagnostics,
+                    )
                 },
             );
         }
 
-        let has_fix_now = job_findings
-            .iter()
-            .any(|f| f.triage.state() == ingot_domain::finding::FindingTriageState::FixNow);
-        let has_needs_investigation = job_findings.iter().any(|f| {
-            f.triage.state() == ingot_domain::finding::FindingTriageState::NeedsInvestigation
+        let has_actionable_findings = job_findings.iter().any(|finding| {
+            matches!(
+                finding.triage.state(),
+                FindingTriageState::FixNow | FindingTriageState::NeedsInvestigation
+            )
         });
 
-        if has_fix_now || has_needs_investigation {
-            if let Some(crate::graph::TransitionTarget::Step(next_step)) =
-                graph.next_step(last_job.step_id, &OutcomeClass::Findings)
-            {
-                let contract = step::find_step(*next_step);
-                if contract.is_dispatchable_job() {
-                    return finish(
-                        item,
-                        attention_badges,
-                        Evaluation {
-                            board_status: BoardStatus::Working,
-                            attention_badges: vec![],
-                            current_step_id: Some(last_job.step_id),
-                            current_phase_kind: None,
-                            phase_status: Some(PhaseStatus::Idle),
-                            next_recommended_action: RecommendedAction::dispatch(*next_step),
-                            dispatchable_step_id: Some(*next_step),
-                            auxiliary_dispatchable_step_ids: vec![],
-                            allowed_actions: vec![AllowedAction::Dispatch],
-                            terminal_readiness: false,
+        if has_actionable_findings {
+            if let Some(next_step) = next_dispatchable_step(graph, last_job.step_id) {
+                return finish(
+                    item,
+                    attention_badges,
+                    Evaluation {
+                        current_step_id: Some(last_job.step_id),
+                        next_recommended_action: RecommendedAction::dispatch(next_step),
+                        dispatchable_step_id: Some(next_step),
+                        allowed_actions: vec![AllowedAction::Dispatch],
+                        ..Evaluation::for_status(
+                            BoardStatus::Working,
+                            PhaseStatus::Idle,
                             diagnostics,
-                        },
-                    );
-                }
+                        )
+                    },
+                );
             }
         }
 
@@ -235,17 +183,9 @@ pub(super) fn evaluate_investigation(
             item,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: Some(last_job.step_id),
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Idle),
-                next_recommended_action: RecommendedAction::None,
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
-                allowed_actions: vec![],
                 terminal_readiness: true,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Idle, diagnostics)
             },
         );
     }
@@ -255,19 +195,21 @@ pub(super) fn evaluate_investigation(
         item,
         attention_badges,
         Evaluation {
-            board_status: BoardStatus::Working,
-            attention_badges: vec![],
             current_step_id: Some(last_job.step_id),
-            current_phase_kind: None,
-            phase_status: Some(PhaseStatus::Idle),
-            next_recommended_action: RecommendedAction::None,
-            dispatchable_step_id: None,
-            auxiliary_dispatchable_step_ids: vec![],
-            allowed_actions: vec![],
-            terminal_readiness: false,
-            diagnostics,
+            ..Evaluation::for_status(BoardStatus::Working, PhaseStatus::Idle, diagnostics)
         },
     )
+}
+
+fn next_dispatchable_step(graph: &WorkflowGraph, step_id: StepId) -> Option<StepId> {
+    let Some(TransitionTarget::Step(next_step)) = graph.next_step(step_id, &OutcomeClass::Findings)
+    else {
+        return None;
+    };
+
+    step::find_step(*next_step)
+        .is_dispatchable_job()
+        .then_some(*next_step)
 }
 
 fn finish(

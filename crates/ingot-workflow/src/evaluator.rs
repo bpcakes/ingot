@@ -83,6 +83,28 @@ pub struct Evaluation {
     pub diagnostics: Vec<String>,
 }
 
+impl Evaluation {
+    fn for_status(
+        board_status: BoardStatus,
+        phase_status: PhaseStatus,
+        diagnostics: Vec<String>,
+    ) -> Self {
+        Self {
+            board_status,
+            attention_badges: Vec::new(),
+            current_step_id: None,
+            current_phase_kind: None,
+            phase_status: Some(phase_status),
+            next_recommended_action: RecommendedAction::None,
+            dispatchable_step_id: None,
+            auxiliary_dispatchable_step_ids: Vec::new(),
+            allowed_actions: Vec::new(),
+            terminal_readiness: false,
+            diagnostics,
+        }
+    }
+}
+
 pub struct Evaluator {
     delivery_graph: WorkflowGraph,
     investigation_graph: WorkflowGraph,
@@ -125,17 +147,8 @@ impl Evaluator {
 
         if item.lifecycle.is_done() {
             return Evaluation {
-                board_status: BoardStatus::Done,
                 attention_badges,
-                current_step_id: None,
-                current_phase_kind: None,
-                phase_status: Some(PhaseStatus::Done),
-                next_recommended_action: RecommendedAction::None,
-                dispatchable_step_id: None,
-                auxiliary_dispatchable_step_ids: vec![],
-                allowed_actions: vec![],
-                terminal_readiness: false,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Done, PhaseStatus::Done, diagnostics)
             };
         }
 
@@ -195,19 +208,15 @@ impl Evaluator {
                 has_terminal_closure_job,
                 attention_badges,
                 Evaluation {
-                    board_status: BoardStatus::Working,
-                    attention_badges: vec![],
                     current_step_id: Some(StepId::PrepareConvergence),
-                    current_phase_kind: None,
-                    phase_status: Some(PhaseStatus::AwaitingCheckoutSync),
                     next_recommended_action: RecommendedAction::named(
                         NamedRecommendedAction::ResolveCheckoutSync,
                     ),
-                    dispatchable_step_id: None,
-                    auxiliary_dispatchable_step_ids: vec![],
-                    allowed_actions: vec![],
-                    terminal_readiness: false,
-                    diagnostics,
+                    ..Evaluation::for_status(
+                        BoardStatus::Working,
+                        PhaseStatus::AwaitingCheckoutSync,
+                        diagnostics,
+                    )
                 },
             );
         }
@@ -232,17 +241,14 @@ impl Evaluator {
                     has_terminal_closure_job,
                     attention_badges,
                     Evaluation {
-                        board_status: BoardStatus::Working,
-                        attention_badges: vec![],
                         current_step_id: base.current_step_id,
                         current_phase_kind: Some(job.phase_kind),
-                        phase_status: Some(PhaseStatus::Running),
-                        next_recommended_action: RecommendedAction::None,
-                        dispatchable_step_id: None,
-                        auxiliary_dispatchable_step_ids: vec![],
                         allowed_actions: vec![AllowedAction::CancelJob],
-                        terminal_readiness: false,
-                        diagnostics,
+                        ..Evaluation::for_status(
+                            BoardStatus::Working,
+                            PhaseStatus::Running,
+                            diagnostics,
+                        )
                     },
                 );
             }
@@ -252,17 +258,14 @@ impl Evaluator {
                 has_terminal_closure_job,
                 attention_badges,
                 Evaluation {
-                    board_status: BoardStatus::Working,
-                    attention_badges: vec![],
                     current_step_id: Some(job.step_id),
                     current_phase_kind: Some(job.phase_kind),
-                    phase_status: Some(PhaseStatus::Running),
-                    next_recommended_action: RecommendedAction::None,
-                    dispatchable_step_id: None,
-                    auxiliary_dispatchable_step_ids: vec![],
                     allowed_actions: vec![AllowedAction::CancelJob],
-                    terminal_readiness: false,
-                    diagnostics,
+                    ..Evaluation::for_status(
+                        BoardStatus::Working,
+                        PhaseStatus::Running,
+                        diagnostics,
+                    )
                 },
             );
         }
@@ -273,17 +276,13 @@ impl Evaluator {
                 has_terminal_closure_job,
                 attention_badges,
                 Evaluation {
-                    board_status: BoardStatus::Working,
-                    attention_badges: vec![],
                     current_step_id: Some(StepId::PrepareConvergence),
                     current_phase_kind: Some(PhaseKind::System),
-                    phase_status: Some(PhaseStatus::Running),
-                    next_recommended_action: RecommendedAction::None,
-                    dispatchable_step_id: None,
-                    auxiliary_dispatchable_step_ids: vec![],
-                    allowed_actions: vec![],
-                    terminal_readiness: false,
-                    diagnostics,
+                    ..Evaluation::for_status(
+                        BoardStatus::Working,
+                        PhaseStatus::Running,
+                        diagnostics,
+                    )
                 },
             );
         }
@@ -307,17 +306,13 @@ impl Evaluator {
             has_terminal_closure_job,
             attention_badges,
             Evaluation {
-                board_status: BoardStatus::Working,
-                attention_badges: vec![],
                 current_step_id: base.current_step_id,
-                current_phase_kind: None,
-                phase_status: Some(base.phase_status),
                 next_recommended_action: base.next_recommended_action,
                 dispatchable_step_id: base.dispatchable_step_id,
                 auxiliary_dispatchable_step_ids,
                 allowed_actions,
                 terminal_readiness: base.terminal_readiness,
-                diagnostics,
+                ..Evaluation::for_status(BoardStatus::Working, base.phase_status, diagnostics)
             },
         )
     }
