@@ -41,15 +41,12 @@ use ingot_usecases::job_lifecycle;
 use sqlx::query;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-#[allow(dead_code)]
-mod shared_harness {
-    use crate as runtime_crate;
-
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/shared_harness.rs"
-    ));
+mod runtime_crate {
+    pub use crate::{AgentRunner, DispatcherConfig, JobDispatcher};
 }
+
+#[path = "../tests/common/shared_harness.rs"]
+mod shared_harness;
 
 use shared_harness::{BlockingRunner, TestHarness as TestRuntimeHarness};
 

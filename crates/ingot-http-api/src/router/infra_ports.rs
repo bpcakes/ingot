@@ -9,10 +9,6 @@ use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::{Workspace, WorkspaceKind};
 use ingot_git::commands::FinalizeTargetRefOutcome;
-use ingot_git::commit::{
-    ConvergenceCommitTrailers, abort_cherry_pick, cherry_pick_no_commit, commit_message,
-    create_daemon_convergence_commit, list_commits_oldest_first, working_tree_has_changes,
-};
 use ingot_git::diff::changed_paths_between;
 use ingot_git::project_repo::ProjectRepoPaths;
 use ingot_git::project_repo::{
@@ -22,10 +18,7 @@ use ingot_git::project_repo::{
 use ingot_usecases::UseCaseError;
 use ingot_usecases::dispatch::DispatchInfraPort;
 use ingot_usecases::workspace::WorkspaceInfraPort;
-use ingot_workspace::{
-    ProvisionedAuthoringWorkspace, ensure_authoring_workspace_state,
-    provision_integration_workspace,
-};
+use ingot_workspace::ensure_authoring_workspace_state;
 
 use super::AppState;
 use super::support::errors::{git_to_internal, repo_to_internal, workspace_to_api_error};
@@ -163,24 +156,6 @@ impl HttpInfraAdapter {
         .map_err(workspace_to_api_error)
     }
 
-    pub(super) async fn provision_integration_workspace(
-        &self,
-        project_id: ProjectId,
-        workspace_path: &Path,
-        workspace_ref: &GitRef,
-        expected_head_oid: &CommitOid,
-    ) -> Result<ProvisionedAuthoringWorkspace, ApiError> {
-        let paths = self.mirror_paths(project_id).await?;
-        provision_integration_workspace(
-            paths.mirror_git_dir.as_path(),
-            workspace_path,
-            workspace_ref,
-            expected_head_oid,
-        )
-        .await
-        .map_err(workspace_to_api_error)
-    }
-
     pub(super) async fn checkout_finalization_status(
         &self,
         project: &Project,
@@ -233,69 +208,6 @@ impl HttpInfraAdapter {
         .map_err(git_to_internal)
     }
 
-    pub(super) async fn list_commits_oldest_first(
-        &self,
-        project_id: ProjectId,
-        base_commit_oid: &CommitOid,
-        head_commit_oid: &CommitOid,
-    ) -> Result<Vec<CommitOid>, ApiError> {
-        let paths = self.mirror_paths(project_id).await?;
-        list_commits_oldest_first(
-            paths.mirror_git_dir.as_path(),
-            base_commit_oid,
-            head_commit_oid,
-        )
-        .await
-        .map_err(git_to_internal)
-    }
-
-    pub(super) async fn commit_message(
-        &self,
-        project_id: ProjectId,
-        commit_oid: &CommitOid,
-    ) -> Result<String, ApiError> {
-        let paths = self.mirror_paths(project_id).await?;
-        commit_message(paths.mirror_git_dir.as_path(), commit_oid)
-            .await
-            .map_err(git_to_internal)
-    }
-
-    pub(super) async fn cherry_pick_no_commit(
-        &self,
-        workspace_path: &Path,
-        commit_oid: &CommitOid,
-    ) -> Result<(), ApiError> {
-        cherry_pick_no_commit(workspace_path, commit_oid)
-            .await
-            .map_err(git_to_internal)
-    }
-
-    pub(super) async fn abort_cherry_pick(&self, workspace_path: &Path) -> Result<(), ApiError> {
-        abort_cherry_pick(workspace_path)
-            .await
-            .map_err(git_to_internal)
-    }
-
-    pub(super) async fn working_tree_has_changes(
-        &self,
-        workspace_path: &Path,
-    ) -> Result<bool, ApiError> {
-        working_tree_has_changes(workspace_path)
-            .await
-            .map_err(git_to_internal)
-    }
-
-    pub(super) async fn create_daemon_convergence_commit(
-        &self,
-        workspace_path: &Path,
-        original_message: &str,
-        trailers: &ConvergenceCommitTrailers,
-    ) -> Result<CommitOid, ApiError> {
-        create_daemon_convergence_commit(workspace_path, original_message, trailers)
-            .await
-            .map_err(git_to_internal)
-    }
-
     pub(super) async fn remove_workspace_path(
         &self,
         project_id: ProjectId,
@@ -330,16 +242,6 @@ impl HttpInfraAdapter {
         ingot_git::commands::update_ref(paths.mirror_git_dir.as_path(), ref_name, commit_oid)
             .await
             .map_err(git_to_internal)
-    }
-
-    pub(super) async fn update_project_ref_oid(
-        &self,
-        project_id: ProjectId,
-        ref_name: &GitRef,
-        commit_oid: &CommitOid,
-    ) -> Result<(), ApiError> {
-        self.update_project_ref(project_id, ref_name, commit_oid)
-            .await
     }
 
     async fn delete_project_ref(

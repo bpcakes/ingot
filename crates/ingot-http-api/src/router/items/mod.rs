@@ -1,8 +1,5 @@
-mod convergence_prep;
 mod revisions;
 
-#[allow(unused_imports)]
-pub(super) use convergence_prep::prepare_convergence_workspace;
 pub(super) use revisions::{
     build_superseding_revision, resolve_seed_target_commit_oid, validate_seed_commit_oid,
 };

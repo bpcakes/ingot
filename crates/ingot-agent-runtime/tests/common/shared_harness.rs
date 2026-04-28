@@ -4,52 +4,26 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::runtime_crate::{AgentRunner, DispatcherConfig, JobDispatcher};
 use ingot_agent_protocol::adapter::AgentError;
 use ingot_agent_protocol::request::AgentRequest;
 use ingot_agent_protocol::response::AgentResponse;
-use ingot_domain::agent::{Agent, AgentCapability};
+use ingot_domain::agent::Agent;
 use ingot_domain::ids;
 use ingot_domain::job::{Job, JobStatus};
 use ingot_domain::project::Project;
-use ingot_domain::test_support::{AgentBuilder, ProjectBuilder, default_timestamp};
+use ingot_domain::test_support::{ProjectBuilder, default_timestamp};
 use ingot_store_sqlite::Database;
+use ingot_test_support::agents::{TestAgentProfile, agent_fixture};
 use ingot_test_support::env::temp_state_root;
 use ingot_usecases::{DispatchNotify, ProjectLocks, UiEventBus};
-use runtime_crate::{AgentRunner, DispatcherConfig, JobDispatcher};
 use tokio::sync::Notify;
 use tokio::time::{sleep, timeout};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestAgentProfile {
-    Mutating,
-    ReviewOnly,
-    Full,
-}
-
-impl TestAgentProfile {
-    fn capabilities(self) -> Vec<AgentCapability> {
-        match self {
-            Self::Mutating => vec![
-                AgentCapability::MutatingJobs,
-                AgentCapability::StructuredOutput,
-            ],
-            Self::ReviewOnly => vec![
-                AgentCapability::ReadOnlyJobs,
-                AgentCapability::StructuredOutput,
-            ],
-            Self::Full => vec![
-                AgentCapability::MutatingJobs,
-                AgentCapability::ReadOnlyJobs,
-                AgentCapability::StructuredOutput,
-            ],
-        }
-    }
-}
-
-pub fn agent_fixture(name: &str, profile: TestAgentProfile) -> Agent {
-    AgentBuilder::new(name, profile.capabilities()).build()
-}
-
+// This harness stays in ingot-agent-runtime tests because it constructs JobDispatcher
+// and implements AgentRunner. Moving it to ingot-test-support would require a
+// dependency from ingot-test-support back to ingot-agent-runtime.
+#[allow(dead_code)]
 pub struct TestHarness {
     pub db: Database,
     pub dispatcher: JobDispatcher,
@@ -59,6 +33,7 @@ pub struct TestHarness {
     pub repo_path: PathBuf,
 }
 
+#[allow(dead_code)]
 impl TestHarness {
     pub async fn new(runner: Arc<dyn AgentRunner>) -> Self {
         Self::with_config_and_events(runner, None, UiEventBus::default()).await
@@ -196,18 +171,21 @@ impl TestHarness {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct BlockingRunnerState {
     launches: usize,
     release_budget: usize,
 }
 
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct BlockingRunner {
     state: Arc<Mutex<BlockingRunnerState>>,
     launch_notify: Arc<Notify>,
     release_notify: Arc<Notify>,
 }
 
+#[allow(dead_code)]
 impl BlockingRunner {
     pub fn new() -> Self {
         Self::default()

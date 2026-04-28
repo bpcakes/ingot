@@ -1,8 +1,3 @@
-#![allow(dead_code)]
-
-// Shared runtime-test helpers are compiled into multiple test binaries, and each binary
-// intentionally uses only a subset of them.
-
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -17,9 +12,9 @@ use ingot_domain::job::{ExecutionPermission, Job, JobInput, OutputArtifactKind, 
 use ingot_domain::project::Project;
 #[allow(unused_imports)]
 pub use ingot_domain::test_support::{
-    AgentBuilder, ConvergenceBuilder, ConvergenceQueueEntryBuilder, FindingBuilder,
-    GitOperationBuilder, ItemBuilder, JobBuilder, ProjectBuilder, RevisionBuilder,
-    WorkspaceBuilder, default_timestamp, parse_timestamp,
+    ConvergenceBuilder, ConvergenceQueueEntryBuilder, FindingBuilder, GitOperationBuilder,
+    ItemBuilder, JobBuilder, ProjectBuilder, RevisionBuilder, WorkspaceBuilder, default_timestamp,
+    parse_timestamp,
 };
 use ingot_domain::workspace::WorkspaceKind;
 use ingot_git::commands::head_oid;
@@ -30,23 +25,24 @@ use ingot_test_support::reports::{
 };
 #[allow(unused_imports)]
 pub use ingot_test_support::sqlite::migrated_test_db;
-#[allow(dead_code)]
-mod shared_harness {
-    use ingot_agent_runtime as runtime_crate;
 
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/shared_harness.rs"
-    ));
+pub mod runtime_crate {
+    pub use ingot_agent_runtime::{AgentRunner, DispatcherConfig, JobDispatcher};
 }
 
+#[path = "shared_harness.rs"]
+mod shared_harness;
+
 #[allow(unused_imports)]
-pub use shared_harness::{BlockingRunner, TestAgentProfile, TestHarness, agent_fixture};
+pub use ingot_test_support::agents::{TestAgentProfile, agent_fixture};
+#[allow(unused_imports)]
+pub use shared_harness::{BlockingRunner, TestHarness};
 
 // ---------------------------------------------------------------------------
 // Entity builders
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub fn test_authoring_job(
     project_id: ids::ProjectId,
     item_id: ids::ItemId,
@@ -65,6 +61,7 @@ pub fn test_authoring_job(
         .build()
 }
 
+#[allow(dead_code)]
 pub fn test_review_job(
     project_id: ids::ProjectId,
     item_id: ids::ItemId,
@@ -112,6 +109,7 @@ impl AgentRunner for FakeRunner {
     }
 }
 
+#[allow(dead_code)]
 pub struct StaticReviewRunner {
     pub base_commit_oid: String,
     pub head_commit_oid: String,
@@ -138,6 +136,7 @@ impl AgentRunner for StaticReviewRunner {
     }
 }
 
+#[allow(dead_code)]
 pub struct ScriptedLoopRunner;
 
 impl AgentRunner for ScriptedLoopRunner {
@@ -216,6 +215,7 @@ impl AgentRunner for ScriptedLoopRunner {
     }
 }
 
+#[allow(dead_code)]
 pub struct CleanInitialReviewRunner;
 
 impl AgentRunner for CleanInitialReviewRunner {
@@ -244,6 +244,7 @@ impl AgentRunner for CleanInitialReviewRunner {
     }
 }
 
+#[allow(dead_code)]
 pub struct CleanCandidateReviewRunner;
 
 impl AgentRunner for CleanCandidateReviewRunner {
@@ -274,6 +275,7 @@ impl AgentRunner for CleanCandidateReviewRunner {
     }
 }
 
+#[allow(dead_code)]
 pub struct CleanValidationRunner;
 
 impl AgentRunner for CleanValidationRunner {
@@ -306,12 +308,14 @@ impl AgentRunner for CleanValidationRunner {
 // Mirror / git helpers
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub async fn ensure_test_mirror(state_root: &Path, project: &Project) -> ProjectRepoPaths {
     let paths = project_repo_paths(state_root, project.id, &project.path);
     ensure_mirror(&paths).await.expect("ensure mirror");
     paths
 }
 
+#[allow(dead_code)]
 pub async fn create_mirror_only_commit(
     mirror_git_dir: &Path,
     base_commit: &str,
@@ -348,6 +352,7 @@ pub async fn create_mirror_only_commit(
 #[allow(unused_imports)]
 pub use ingot_test_support::git::{git_output, run_git as git_sync, temp_git_repo};
 
+#[allow(dead_code)]
 pub fn prompt_value(prompt: &str, label: &str) -> Option<String> {
     prompt.lines().find_map(|line| {
         let prefix = format!("- {label}: ");
