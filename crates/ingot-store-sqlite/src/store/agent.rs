@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use ingot_domain::agent::Agent;
 use ingot_domain::ids::AgentId;
 use ingot_domain::ports::{AgentRepository, RepositoryError};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, parse_json, required_row,
+    db_err, db_write_err, ensure_rows_affected, required_row, row_get, row_get_json, serialize_json,
 };
 use crate::db::Database;
 
@@ -55,7 +54,7 @@ impl Database {
         .bind(agent.provider)
         .bind(&agent.model)
         .bind(agent.cli_path.to_string_lossy().as_ref())
-        .bind(serde_json::to_string(&agent.capabilities).map_err(json_err)?)
+        .bind(serialize_json(&agent.capabilities)?)
         .bind(agent.health_check.as_deref())
         .bind(agent.status)
         .execute(&self.pool)
@@ -78,7 +77,7 @@ impl Database {
         .bind(agent.provider)
         .bind(&agent.model)
         .bind(agent.cli_path.to_string_lossy().as_ref())
-        .bind(serde_json::to_string(&agent.capabilities).map_err(json_err)?)
+        .bind(serialize_json(&agent.capabilities)?)
         .bind(agent.health_check.as_deref())
         .bind(agent.status)
         .bind(agent.id)
@@ -120,15 +119,15 @@ impl AgentRepository for Database {
 
 fn map_agent(row: &SqliteRow) -> Result<Agent, RepositoryError> {
     Ok(Agent {
-        id: row.try_get("id").map_err(db_err)?,
-        slug: row.try_get("slug").map_err(db_err)?,
-        name: row.try_get("name").map_err(db_err)?,
-        adapter_kind: row.try_get("adapter_kind").map_err(db_err)?,
-        provider: row.try_get("provider").map_err(db_err)?,
-        model: row.try_get("model").map_err(db_err)?,
-        cli_path: PathBuf::from(row.try_get::<String, _>("cli_path").map_err(db_err)?),
-        capabilities: parse_json(row.try_get("capabilities").map_err(db_err)?)?,
-        health_check: row.try_get("health_check").map_err(db_err)?,
-        status: row.try_get("status").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        slug: row_get(row, "slug")?,
+        name: row_get(row, "name")?,
+        adapter_kind: row_get(row, "adapter_kind")?,
+        provider: row_get(row, "provider")?,
+        model: row_get(row, "model")?,
+        cli_path: PathBuf::from(row_get::<String>(row, "cli_path")?),
+        capabilities: row_get_json(row, "capabilities")?,
+        health_check: row_get(row, "health_check")?,
+        status: row_get(row, "status")?,
     })
 }

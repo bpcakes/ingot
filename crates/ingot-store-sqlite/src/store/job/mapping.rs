@@ -3,10 +3,9 @@ use ingot_domain::ids::{AgentId, WorkspaceId};
 use ingot_domain::job::{Job, JobInput, JobState, JobStateParts};
 use ingot_domain::lease_owner_id::LeaseOwnerId;
 use ingot_domain::ports::RepositoryError;
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use crate::store::helpers::{StoreDecodeError, db_err, parse_json};
+use crate::store::helpers::{StoreDecodeError, row_get, row_get_optional_json};
 
 pub(super) fn encode_job_input(
     job_input: &JobInput,
@@ -72,37 +71,30 @@ fn decode_job_input(
 pub(super) fn map_job(row: &SqliteRow) -> Result<Job, RepositoryError> {
     use ingot_domain::job::{JobStatus, OutcomeClass};
 
-    // Extract flat columns
-    let status: JobStatus = row.try_get("status").map_err(db_err)?;
-    let outcome_class: Option<OutcomeClass> = row.try_get("outcome_class").map_err(db_err)?;
-    let workspace_id: Option<WorkspaceId> = row.try_get("workspace_id").map_err(db_err)?;
-    let agent_id: Option<AgentId> = row.try_get("agent_id").map_err(db_err)?;
-    let prompt_snapshot: Option<String> = row.try_get("prompt_snapshot").map_err(db_err)?;
-    let phase_template_digest: Option<String> =
-        row.try_get("phase_template_digest").map_err(db_err)?;
-    let output_commit_oid: Option<CommitOid> = row.try_get("output_commit_oid").map_err(db_err)?;
-    let result_schema_version: Option<String> =
-        row.try_get("result_schema_version").map_err(db_err)?;
-    let result_payload: Option<serde_json::Value> = row
-        .try_get::<Option<String>, _>("result_payload")
-        .map_err(db_err)?
-        .map(parse_json)
-        .transpose()?;
-    let process_pid: Option<u32> = row
-        .try_get::<Option<i64>, _>("process_pid")
-        .map_err(db_err)?
-        .map(|value| value as u32);
-    let lease_owner_id: Option<LeaseOwnerId> = row.try_get("lease_owner_id").map_err(db_err)?;
-    let heartbeat_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("heartbeat_at").map_err(db_err)?;
-    let lease_expires_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("lease_expires_at").map_err(db_err)?;
-    let error_code: Option<String> = row.try_get("error_code").map_err(db_err)?;
-    let error_message: Option<String> = row.try_get("error_message").map_err(db_err)?;
-    let started_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("started_at").map_err(db_err)?;
-    let ended_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("ended_at").map_err(db_err)?;
+    let status: JobStatus = row_get(row, "status")?;
+    let outcome_class: Option<OutcomeClass> = row_get(row, "outcome_class")?;
+    let workspace_id: Option<WorkspaceId> = row_get(row, "workspace_id")?;
+    let agent_id: Option<AgentId> = row_get(row, "agent_id")?;
+    let prompt_snapshot: Option<String> = row_get(row, "prompt_snapshot")?;
+    let phase_template_digest: Option<String> = row_get(row, "phase_template_digest")?;
+    let output_commit_oid: Option<CommitOid> = row_get(row, "output_commit_oid")?;
+    let result_schema_version: Option<String> = row_get(row, "result_schema_version")?;
+    let result_payload: Option<serde_json::Value> = row_get_optional_json(row, "result_payload")?;
+    let process_pid: Option<u32> =
+        row_get::<Option<i64>>(row, "process_pid")?.map(|value| value as u32);
+    let lease_owner_id: Option<LeaseOwnerId> = row_get(row, "lease_owner_id")?;
+    let heartbeat_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "heartbeat_at")?;
+    let lease_expires_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "lease_expires_at")?;
+    let error_code: Option<String> = row_get(row, "error_code")?;
+    let error_message: Option<String> = row_get(row, "error_message")?;
+    let started_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "started_at")?;
+    let ended_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "ended_at")?;
+
+    let job_input_kind = row_get(row, "job_input_kind")?;
+    let input_base_commit_oid = row_get(row, "input_base_commit_oid")?;
+    let input_head_commit_oid = row_get(row, "input_head_commit_oid")?;
+    let job_input = decode_job_input(job_input_kind, input_base_commit_oid, input_head_commit_oid)
+        .map_err(|error| RepositoryError::Database(Box::new(error)))?;
 
     let state = JobState::from_parts(
         status,
@@ -128,29 +120,22 @@ pub(super) fn map_job(row: &SqliteRow) -> Result<Job, RepositoryError> {
     .map_err(|error| RepositoryError::Database(error.into()))?;
 
     Ok(Job {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        item_id: row.try_get("item_id").map_err(db_err)?,
-        item_revision_id: row.try_get("item_revision_id").map_err(db_err)?,
-        step_id: row.try_get("step_id").map_err(db_err)?,
-        semantic_attempt_no: row
-            .try_get::<i64, _>("semantic_attempt_no")
-            .map_err(db_err)? as u32,
-        retry_no: row.try_get::<i64, _>("retry_no").map_err(db_err)? as u32,
-        supersedes_job_id: row.try_get("supersedes_job_id").map_err(db_err)?,
-        phase_kind: row.try_get("phase_kind").map_err(db_err)?,
-        workspace_kind: row.try_get("workspace_kind").map_err(db_err)?,
-        execution_permission: row.try_get("execution_permission").map_err(db_err)?,
-        context_policy: row.try_get("context_policy").map_err(db_err)?,
-        phase_template_slug: row.try_get("phase_template_slug").map_err(db_err)?,
-        job_input: decode_job_input(
-            row.try_get("job_input_kind").map_err(db_err)?,
-            row.try_get("input_base_commit_oid").map_err(db_err)?,
-            row.try_get("input_head_commit_oid").map_err(db_err)?,
-        )
-        .map_err(|error| RepositoryError::Database(Box::new(error)))?,
-        output_artifact_kind: row.try_get("output_artifact_kind").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        item_id: row_get(row, "item_id")?,
+        item_revision_id: row_get(row, "item_revision_id")?,
+        step_id: row_get(row, "step_id")?,
+        semantic_attempt_no: row_get::<i64>(row, "semantic_attempt_no")? as u32,
+        retry_no: row_get::<i64>(row, "retry_no")? as u32,
+        supersedes_job_id: row_get(row, "supersedes_job_id")?,
+        phase_kind: row_get(row, "phase_kind")?,
+        workspace_kind: row_get(row, "workspace_kind")?,
+        execution_permission: row_get(row, "execution_permission")?,
+        context_policy: row_get(row, "context_policy")?,
+        phase_template_slug: row_get(row, "phase_template_slug")?,
+        job_input,
+        output_artifact_kind: row_get(row, "output_artifact_kind")?,
+        created_at: row_get(row, "created_at")?,
         state,
     })
 }

@@ -3,31 +3,13 @@ use std::path::PathBuf;
 use ingot_domain::ids::ProjectId;
 use ingot_domain::ports::{ProjectRepository, RepositoryError};
 use ingot_domain::project::{AgentRouting, AutoTriagePolicy, Project};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, parse_json, required_row,
+    db_err, db_write_err, ensure_rows_affected, required_row, row_get, row_get_optional_json,
+    serialize_optional_json,
 };
 use crate::db::Database;
-
-fn serialize_agent_routing(
-    routing: Option<&AgentRouting>,
-) -> Result<Option<String>, RepositoryError> {
-    routing
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(json_err)
-}
-
-fn serialize_auto_triage_policy(
-    policy: Option<&AutoTriagePolicy>,
-) -> Result<Option<String>, RepositoryError> {
-    policy
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(json_err)
-}
 
 impl Database {
     pub async fn list_projects(&self) -> Result<Vec<Project>, RepositoryError> {
@@ -58,9 +40,8 @@ impl Database {
     }
 
     pub async fn create_project(&self, project: &Project) -> Result<(), RepositoryError> {
-        let agent_routing_json = serialize_agent_routing(project.agent_routing.as_ref())?;
-        let auto_triage_policy_json =
-            serialize_auto_triage_policy(project.auto_triage_policy.as_ref())?;
+        let agent_routing_json = serialize_optional_json(project.agent_routing.as_ref())?;
+        let auto_triage_policy_json = serialize_optional_json(project.auto_triage_policy.as_ref())?;
         sqlx::query(
             "INSERT INTO projects (id, name, path, default_branch, color, execution_mode, agent_routing, auto_triage_policy, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -83,9 +64,8 @@ impl Database {
     }
 
     pub async fn update_project(&self, project: &Project) -> Result<(), RepositoryError> {
-        let agent_routing_json = serialize_agent_routing(project.agent_routing.as_ref())?;
-        let auto_triage_policy_json =
-            serialize_auto_triage_policy(project.auto_triage_policy.as_ref())?;
+        let agent_routing_json = serialize_optional_json(project.agent_routing.as_ref())?;
+        let auto_triage_policy_json = serialize_optional_json(project.auto_triage_policy.as_ref())?;
         let result = sqlx::query(
             "UPDATE projects
              SET name = ?, path = ?, default_branch = ?, color = ?, execution_mode = ?, agent_routing = ?, auto_triage_policy = ?, updated_at = ?
@@ -137,28 +117,20 @@ impl ProjectRepository for Database {
 }
 
 fn map_project(row: &SqliteRow) -> Result<Project, RepositoryError> {
-    let agent_routing: Option<AgentRouting> = row
-        .try_get::<Option<String>, _>("agent_routing")
-        .map_err(db_err)?
-        .map(parse_json)
-        .transpose()?;
-
-    let auto_triage_policy: Option<AutoTriagePolicy> = row
-        .try_get::<Option<String>, _>("auto_triage_policy")
-        .map_err(db_err)?
-        .map(parse_json)
-        .transpose()?;
+    let agent_routing: Option<AgentRouting> = row_get_optional_json(row, "agent_routing")?;
+    let auto_triage_policy: Option<AutoTriagePolicy> =
+        row_get_optional_json(row, "auto_triage_policy")?;
 
     Ok(Project {
-        id: row.try_get("id").map_err(db_err)?,
-        name: row.try_get("name").map_err(db_err)?,
-        path: PathBuf::from(row.try_get::<String, _>("path").map_err(db_err)?),
-        default_branch: row.try_get("default_branch").map_err(db_err)?,
-        color: row.try_get("color").map_err(db_err)?,
-        execution_mode: row.try_get("execution_mode").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        name: row_get(row, "name")?,
+        path: PathBuf::from(row_get::<String>(row, "path")?),
+        default_branch: row_get(row, "default_branch")?,
+        color: row_get(row, "color")?,
+        execution_mode: row_get(row, "execution_mode")?,
         agent_routing,
         auto_triage_policy,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        updated_at: row.try_get("updated_at").map_err(db_err)?,
+        created_at: row_get(row, "created_at")?,
+        updated_at: row_get(row, "updated_at")?,
     })
 }

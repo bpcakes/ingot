@@ -1,8 +1,8 @@
 use ingot_domain::ids::{ItemId, ItemRevisionId};
 use ingot_domain::ports::{ConflictKind, RepositoryError};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use sqlx::sqlite::{SqliteQueryResult, SqliteRow};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Decode, Row, Sqlite, Transaction, Type};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum StoreDecodeError {
@@ -19,13 +19,49 @@ where
     })
 }
 
-pub(super) fn serialize_optional_json(
-    value: Option<&serde_json::Value>,
-) -> Result<Option<String>, RepositoryError> {
-    value
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(json_err)
+pub(super) fn row_get<'row, T>(
+    row: &'row SqliteRow,
+    column: &'static str,
+) -> Result<T, RepositoryError>
+where
+    T: Decode<'row, Sqlite> + Type<Sqlite>,
+{
+    row.try_get(column).map_err(db_err)
+}
+
+pub(super) fn row_get_json<T>(row: &SqliteRow, column: &'static str) -> Result<T, RepositoryError>
+where
+    T: DeserializeOwned,
+{
+    let value = row_get::<String>(row, column)?;
+    parse_json(value)
+}
+
+pub(super) fn row_get_optional_json<T>(
+    row: &SqliteRow,
+    column: &'static str,
+) -> Result<Option<T>, RepositoryError>
+where
+    T: DeserializeOwned,
+{
+    let value = row_get::<Option<String>>(row, column)?;
+    value.map(parse_json).transpose()
+}
+
+pub(super) fn serialize_json<T>(value: &T) -> Result<String, RepositoryError>
+where
+    T: Serialize + ?Sized,
+{
+    serde_json::to_string(value).map_err(json_err)
+}
+
+pub(super) fn serialize_optional_json<T>(
+    value: Option<&T>,
+) -> Result<Option<String>, RepositoryError>
+where
+    T: Serialize + ?Sized,
+{
+    value.map(serialize_json).transpose()
 }
 
 pub(super) fn db_err<E>(err: E) -> RepositoryError
