@@ -1,33 +1,31 @@
-use super::dispatch::auto_dispatch_projected_review_job;
-use super::items::{
-    current_authoring_head_for_revision_with_workspace, effective_authoring_base_commit_oid,
-};
-use super::support::{
-    activity::append_activity,
-    errors::{complete_job_error_to_api_error, repo_to_internal, repo_to_item, repo_to_project},
-    io::{read_optional_json, read_optional_json_lines, read_optional_text},
-    path::ApiPath,
-};
-use super::types::*;
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use ingot_domain::activity::{ActivityEventType, ActivitySubject};
 use ingot_domain::ids::JobId;
-use ingot_domain::item::{ApprovalState, Item};
+use ingot_domain::item::Item;
 use ingot_domain::job::{JobStatus, OutcomeClass};
 use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::WorkspaceStatus;
 use ingot_usecases::dispatch::failure_status;
 use ingot_usecases::job_lifecycle;
+use ingot_usecases::job_workflows;
 use ingot_usecases::{CompleteJobCommand, UseCaseError, rebuild_revision_context};
 use tracing::warn;
 
 use crate::error::ApiError;
 
 use super::app::AppState;
+use super::items::{
+    current_authoring_head_for_revision_with_workspace, effective_authoring_base_commit_oid,
+};
+use super::support::{
+    errors::{complete_job_error_to_api_error, repo_to_internal, repo_to_item, repo_to_project},
+    io::{read_optional_json, read_optional_json_lines, read_optional_text},
+    path::ApiPath,
+};
+use super::types::*;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -214,78 +212,31 @@ pub(super) async fn complete_job(
     ApiPath(JobPathParams { job_id }): ApiPath<JobPathParams>,
     Json(request): Json<CompleteJobRequest>,
 ) -> Result<Json<CompleteJobResponse>, ApiError> {
-    let prior_job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
-    let prior_item = state
-        .db
-        .get_item(prior_job.item_id)
-        .await
-        .map_err(repo_to_item)?;
-    let project = state
-        .db
-        .get_project(prior_job.project_id)
-        .await
-        .map_err(repo_to_project)?;
-    state.infra().refresh_project_mirror(&project).await?;
-    let result = state
-        .complete_job_service
-        .execute(CompleteJobCommand {
+    let output = job_workflows::complete_job_workflow(
+        &state.db,
+        &state.infra(),
+        &state.complete_job_service,
+        &state.project_locks,
+        CompleteJobCommand {
             job_id,
             outcome_class: request.outcome_class,
             result_schema_version: request.result_schema_version,
             result_payload: request.result_payload,
             output_commit_oid: request.output_commit_oid,
-        })
-        .await
-        .map_err(complete_job_error_to_api_error)?;
-    refresh_revision_context_for_job(&state, job_id).await?;
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
-    let item = state.db.get_item(job.item_id).await.map_err(repo_to_item)?;
-    append_activity(
-        &state,
-        job.project_id,
-        ActivityEventType::JobCompleted,
-        ActivitySubject::Job(job.id),
-        serde_json::json!({ "item_id": job.item_id, "outcome": job.state.outcome_class() }),
+        },
     )
-    .await?;
-    if prior_item.escalation.is_escalated()
-        && item.current_revision_id == job.item_revision_id
-        && !item.escalation.is_escalated()
-    {
-        append_activity(
-            &state,
-            job.project_id,
-            ActivityEventType::ItemEscalationCleared,
-            ActivitySubject::Item(item.id),
-            serde_json::json!({ "reason": "successful_retry", "job_id": job.id }),
-        )
-        .await?;
-    }
-    if job.step_id == ingot_domain::step_id::StepId::ValidateIntegrated
-        && job.state.outcome_class() == Some(OutcomeClass::Clean)
-        && item.approval_state == ApprovalState::Pending
-    {
-        append_activity(
-            &state,
-            job.project_id,
-            ActivityEventType::ApprovalRequested,
-            ActivitySubject::Item(item.id),
-            serde_json::json!({ "job_id": job.id }),
-        )
-        .await?;
-    }
-    if let Err(error) = auto_dispatch_projected_review_job(&state, &project, item.id).await {
+    .await
+    .map_err(complete_job_error_to_api_error)?;
+
+    if let Err(error) = output.auto_dispatch_result {
         warn!(
             ?error,
-            project_id = %project.id,
-            item_id = %item.id,
-            job_id = %job.id,
             "projected review auto-dispatch failed after job completion"
         );
     }
 
     Ok(Json(CompleteJobResponse {
-        finding_count: result.finding_count,
+        finding_count: output.finding_count,
     }))
 }
 

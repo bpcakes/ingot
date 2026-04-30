@@ -7,10 +7,8 @@ use std::process::Stdio;
 
 use chrono::Utc;
 use glob::glob;
-use ingot_domain::activity::{ActivityEventType, ActivitySubject};
 use ingot_domain::harness::{HarnessCommand, HarnessProfile, HarnessProfileError};
 use ingot_domain::ids::WorkspaceId;
-use ingot_domain::item::ApprovalState;
 use ingot_domain::job::{
     ExecutionPermission, Job, JobAssignment, JobStatus, OutcomeClass, PhaseKind,
 };
@@ -19,13 +17,15 @@ use ingot_domain::ports::{FinishJobNonSuccessParams, StartJobExecutionParams};
 use ingot_domain::step_id::StepId;
 use ingot_domain::workspace::WorkspaceKind;
 use ingot_git::diff::changed_paths_between;
-use ingot_usecases::{CompleteJobCommand, rebuild_revision_context};
+use ingot_usecases::rebuild_revision_context;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::{JobDispatcher, RunningJobResult, RuntimeError, report};
+use crate::{
+    JobDispatcher, ReportCompletion, ReportCompletionError, RunningJobResult, RuntimeError, report,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedHarnessValidation {
@@ -323,71 +323,66 @@ impl JobDispatcher {
             return Ok(());
         }
 
-        if let Err(error) = self
-            .complete_job_service()
-            .execute(CompleteJobCommand {
-                job_id: prepared.job_id,
-                outcome_class,
-                result_schema_version: Some(report::VALIDATION_REPORT_V1.to_string()),
-                result_payload: Some(result_payload),
-                output_commit_oid: None,
-            })
-            .await
-        {
-            let current_job = self.db.get_job(prepared.job_id).await?;
-            if current_job.state.status() == JobStatus::Cancelled {
-                info!(
-                    job_id = %prepared.job_id,
-                    "daemon-only validation was cancelled before completion was persisted"
-                );
-                return Ok(());
-            }
-            warn!(?error, job_id = %prepared.job_id, "harness validation completion failed");
-            self.db
-                .finish_job_non_success(FinishJobNonSuccessParams {
+        let completion_result = self
+            .complete_report_with_finalizers(
+                ReportCompletion {
                     job_id: prepared.job_id,
                     item_id: prepared.item_id,
-                    expected_item_revision_id: prepared.revision_id,
-                    status: JobStatus::Failed,
-                    outcome_class: Some(OutcomeClass::TerminalFailure),
-                    error_code: Some("harness_command_failed".into()),
-                    error_message: Some(format!("{error:?}")),
-                    escalation_reason: None,
-                })
-                .await?;
-            return Ok(());
+                    project_id: prepared.project_id,
+                    step_id: prepared.step_id,
+                    outcome_class,
+                    result_schema_version: report::VALIDATION_REPORT_V1.to_string(),
+                    result_payload,
+                    output_commit_oid: None,
+                },
+                || async { Ok::<(), RuntimeError>(()) },
+                || async { self.refresh_harness_revision_context(&prepared).await },
+                || async { Ok::<(), RuntimeError>(()) },
+            )
+            .await;
+        if let Err(error) = completion_result {
+            return match error {
+                ReportCompletionError::CompletionRejected(error) => {
+                    let current_job = self.db.get_job(prepared.job_id).await?;
+                    if current_job.state.status() == JobStatus::Cancelled {
+                        info!(
+                            job_id = %prepared.job_id,
+                            "daemon-only validation was cancelled before completion was persisted"
+                        );
+                        return Ok(());
+                    }
+                    warn!(?error, job_id = %prepared.job_id, "harness validation completion failed");
+                    self.db
+                        .finish_job_non_success(FinishJobNonSuccessParams {
+                            job_id: prepared.job_id,
+                            item_id: prepared.item_id,
+                            expected_item_revision_id: prepared.revision_id,
+                            status: JobStatus::Failed,
+                            outcome_class: Some(OutcomeClass::TerminalFailure),
+                            error_code: Some("harness_command_failed".into()),
+                            error_message: Some(format!("{error:?}")),
+                            escalation_reason: None,
+                        })
+                        .await?;
+                    Ok(())
+                }
+                ReportCompletionError::Runtime(error) => Err(error),
+            };
         }
 
-        self.append_activity(
-            prepared.project_id,
-            ActivityEventType::JobCompleted,
-            ActivitySubject::Job(prepared.job_id),
-            serde_json::json!({ "item_id": prepared.item_id, "outcome": outcome }),
-        )
-        .await?;
+        info!(
+            job_id = %prepared.job_id,
+            step_id = %prepared.step_id,
+            outcome = outcome,
+            "completed harness validation"
+        );
+        Ok(())
+    }
 
-        if prepared.step_id == StepId::ValidateIntegrated && outcome_class == OutcomeClass::Clean {
-            let updated_item = self.db.get_item(prepared.item_id).await?;
-            if updated_item.approval_state == ApprovalState::Pending {
-                self.append_activity(
-                    prepared.project_id,
-                    ActivityEventType::ApprovalRequested,
-                    ActivitySubject::Item(prepared.item_id),
-                    serde_json::json!({ "job_id": prepared.job_id }),
-                )
-                .await?;
-            }
-        }
-
-        if outcome_class == OutcomeClass::Findings {
-            let project = self.db.get_project(prepared.project_id).await?;
-            if project.execution_mode == ingot_domain::project::ExecutionMode::Autopilot {
-                let item = self.db.get_item(prepared.item_id).await?;
-                self.auto_triage_job_findings(&project, prepared.job_id, &item)
-                    .await?;
-            }
-        }
-
+    async fn refresh_harness_revision_context(
+        &self,
+        prepared: &PreparedHarnessValidation,
+    ) -> Result<(), RuntimeError> {
         let revision = self.db.get_revision(prepared.revision_id).await?;
         let item = self.db.get_item(prepared.item_id).await?;
         let jobs = self.db.list_jobs_by_item(prepared.item_id).await?;
@@ -429,16 +424,6 @@ impl JobDispatcher {
             Utc::now(),
         );
         self.db.upsert_revision_context(&context).await?;
-
-        self.auto_dispatch_projected_review(prepared.project_id, prepared.item_id)
-            .await?;
-
-        info!(
-            job_id = %prepared.job_id,
-            step_id = %prepared.step_id,
-            outcome = outcome,
-            "completed harness validation"
-        );
         Ok(())
     }
 

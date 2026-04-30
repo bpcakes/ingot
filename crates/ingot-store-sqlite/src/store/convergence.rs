@@ -4,10 +4,11 @@ use ingot_domain::convergence::{
 };
 use ingot_domain::ids::{ConvergenceId, ItemId, ItemRevisionId};
 use ingot_domain::ports::{ConvergenceRepository, RepositoryError};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+};
 use crate::db::Database;
 
 impl Database {
@@ -225,28 +226,22 @@ impl ConvergenceRepository for Database {
 }
 
 fn map_convergence(row: &SqliteRow) -> Result<Convergence, RepositoryError> {
-    let status: ConvergenceStatus = row.try_get("status").map_err(db_err)?;
+    let status: ConvergenceStatus = row_get(row, "status")?;
 
     let integration_workspace_id: Option<ingot_domain::ids::WorkspaceId> =
-        row.try_get("integration_workspace_id").map_err(db_err)?;
-    let input_target_commit_oid: Option<CommitOid> =
-        row.try_get("input_target_commit_oid").map_err(db_err)?;
-    let prepared_commit_oid: Option<CommitOid> =
-        row.try_get("prepared_commit_oid").map_err(db_err)?;
-    let final_target_commit_oid: Option<CommitOid> =
-        row.try_get("final_target_commit_oid").map_err(db_err)?;
+        row_get(row, "integration_workspace_id")?;
+    let input_target_commit_oid: Option<CommitOid> = row_get(row, "input_target_commit_oid")?;
+    let prepared_commit_oid: Option<CommitOid> = row_get(row, "prepared_commit_oid")?;
+    let final_target_commit_oid: Option<CommitOid> = row_get(row, "final_target_commit_oid")?;
     let checkout_adoption_state: Option<CheckoutAdoptionState> =
-        row.try_get("checkout_adoption_state").map_err(db_err)?;
-    let checkout_adoption_message: Option<String> =
-        row.try_get("checkout_adoption_message").map_err(db_err)?;
-    let checkout_adoption_updated_at: Option<chrono::DateTime<chrono::Utc>> = row
-        .try_get("checkout_adoption_updated_at")
-        .map_err(db_err)?;
+        row_get(row, "checkout_adoption_state")?;
+    let checkout_adoption_message: Option<String> = row_get(row, "checkout_adoption_message")?;
+    let checkout_adoption_updated_at: Option<chrono::DateTime<chrono::Utc>> =
+        row_get(row, "checkout_adoption_updated_at")?;
     let checkout_adoption_synced_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("checkout_adoption_synced_at").map_err(db_err)?;
-    let conflict_summary: Option<String> = row.try_get("conflict_summary").map_err(db_err)?;
-    let completed_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("completed_at").map_err(db_err)?;
+        row_get(row, "checkout_adoption_synced_at")?;
+    let conflict_summary: Option<String> = row_get(row, "conflict_summary")?;
+    let completed_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "completed_at")?;
 
     let state = ConvergenceState::from_parts(
         status,
@@ -266,16 +261,16 @@ fn map_convergence(row: &SqliteRow) -> Result<Convergence, RepositoryError> {
     .map_err(|error| RepositoryError::Database(error.into()))?;
 
     Ok(Convergence {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        item_id: row.try_get("item_id").map_err(db_err)?,
-        item_revision_id: row.try_get("item_revision_id").map_err(db_err)?,
-        source_workspace_id: row.try_get("source_workspace_id").map_err(db_err)?,
-        source_head_commit_oid: row.try_get("source_head_commit_oid").map_err(db_err)?,
-        target_ref: row.try_get("target_ref").map_err(db_err)?,
-        strategy: row.try_get("strategy").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        item_id: row_get(row, "item_id")?,
+        item_revision_id: row_get(row, "item_revision_id")?,
+        source_workspace_id: row_get(row, "source_workspace_id")?,
+        source_head_commit_oid: row_get(row, "source_head_commit_oid")?,
+        target_ref: row_get(row, "target_ref")?,
+        strategy: row_get(row, "strategy")?,
         target_head_valid: None,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        created_at: row_get(row, "created_at")?,
         state,
     })
 }

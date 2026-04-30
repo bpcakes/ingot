@@ -4,13 +4,12 @@ use ingot_domain::ids::{FindingId, ItemId, JobId};
 use ingot_domain::item::Item;
 use ingot_domain::ports::{ConflictKind, FindingRepository, RepositoryError};
 use ingot_domain::revision::ItemRevision;
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Sqlite, Transaction};
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, parse_json,
-    required_row,
+    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, required_row, row_get,
+    row_get_json, row_get_optional_json,
 };
 use super::item::{insert_item_query, insert_revision_query};
 use crate::db::Database;
@@ -359,11 +358,10 @@ pub(super) async fn upsert_finding(
 }
 
 fn map_finding(row: &SqliteRow) -> Result<Finding, RepositoryError> {
-    let state: FindingTriageState = row.try_get("triage_state").map_err(db_err)?;
-    let linked_item_id: Option<ItemId> = row.try_get("linked_item_id").map_err(db_err)?;
-    let triage_note: Option<String> = row.try_get("triage_note").map_err(db_err)?;
-    let triaged_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("triaged_at").map_err(db_err)?;
+    let state: FindingTriageState = row_get(row, "triage_state")?;
+    let linked_item_id: Option<ItemId> = row_get(row, "linked_item_id")?;
+    let triage_note: Option<String> = row_get(row, "triage_note")?;
+    let triaged_at: Option<chrono::DateTime<chrono::Utc>> = row_get(row, "triaged_at")?;
     let triage = FindingTriage::try_from_parts(
         state,
         linked_item_id,
@@ -378,34 +376,24 @@ fn map_finding(row: &SqliteRow) -> Result<Finding, RepositoryError> {
     )?;
 
     Ok(Finding {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        source_item_id: row.try_get("source_item_id").map_err(db_err)?,
-        source_item_revision_id: row.try_get("source_item_revision_id").map_err(db_err)?,
-        source_job_id: row.try_get("source_job_id").map_err(db_err)?,
-        source_step_id: row.try_get("source_step_id").map_err(db_err)?,
-        source_report_schema_version: row
-            .try_get("source_report_schema_version")
-            .map_err(db_err)?,
-        source_finding_key: row.try_get("source_finding_key").map_err(db_err)?,
-        source_subject_kind: row.try_get("source_subject_kind").map_err(db_err)?,
-        source_subject_base_commit_oid: row
-            .try_get("source_subject_base_commit_oid")
-            .map_err(db_err)?,
-        source_subject_head_commit_oid: row
-            .try_get("source_subject_head_commit_oid")
-            .map_err(db_err)?,
-        code: row.try_get("code").map_err(db_err)?,
-        severity: row.try_get("severity").map_err(db_err)?,
-        summary: row.try_get("summary").map_err(db_err)?,
-        paths: parse_json(row.try_get("paths").map_err(db_err)?)?,
-        evidence: parse_json(row.try_get("evidence").map_err(db_err)?)?,
-        investigation: row
-            .try_get::<Option<String>, _>("investigation")
-            .map_err(db_err)?
-            .map(parse_json)
-            .transpose()?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        source_item_id: row_get(row, "source_item_id")?,
+        source_item_revision_id: row_get(row, "source_item_revision_id")?,
+        source_job_id: row_get(row, "source_job_id")?,
+        source_step_id: row_get(row, "source_step_id")?,
+        source_report_schema_version: row_get(row, "source_report_schema_version")?,
+        source_finding_key: row_get(row, "source_finding_key")?,
+        source_subject_kind: row_get(row, "source_subject_kind")?,
+        source_subject_base_commit_oid: row_get(row, "source_subject_base_commit_oid")?,
+        source_subject_head_commit_oid: row_get(row, "source_subject_head_commit_oid")?,
+        code: row_get(row, "code")?,
+        severity: row_get(row, "severity")?,
+        summary: row_get(row, "summary")?,
+        paths: row_get_json(row, "paths")?,
+        evidence: row_get_json(row, "evidence")?,
+        investigation: row_get_optional_json(row, "investigation")?,
+        created_at: row_get(row, "created_at")?,
         triage,
     })
 }

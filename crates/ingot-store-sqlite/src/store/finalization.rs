@@ -7,9 +7,9 @@ use ingot_domain::ports::{
     ConflictKind, FinalizationCheckoutAdoptionSucceededMutation, FinalizationMutation,
     FinalizationRepository, FinalizationTargetRefAdvancedMutation, RepositoryError,
 };
-use sqlx::{Row, Sqlite, Transaction};
+use sqlx::{Sqlite, Transaction};
 
-use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err, required};
+use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err, required, row_get};
 use crate::db::Database;
 
 impl Database {
@@ -71,10 +71,9 @@ async fn apply_target_ref_advanced(
     let convergence_row = required(convergence_row)?;
 
     let previous_status: ingot_domain::convergence::ConvergenceStatus =
-        convergence_row.try_get("status").map_err(db_err)?;
-    let integration_workspace_id: Option<ingot_domain::ids::WorkspaceId> = convergence_row
-        .try_get("integration_workspace_id")
-        .map_err(db_err)?;
+        row_get(&convergence_row, "status")?;
+    let integration_workspace_id: Option<ingot_domain::ids::WorkspaceId> =
+        row_get(&convergence_row, "integration_workspace_id")?;
 
     if !matches!(
         previous_status,
@@ -99,9 +98,8 @@ async fn apply_target_ref_advanced(
     .map_err(db_err)?;
     let item_row = required(item_row)?;
 
-    let lifecycle_state: String = item_row.try_get("lifecycle_state").map_err(db_err)?;
-    let escalation_reason: Option<EscalationReason> =
-        item_row.try_get("escalation_reason").map_err(db_err)?;
+    let lifecycle_state: String = row_get(&item_row, "lifecycle_state")?;
+    let escalation_reason: Option<EscalationReason> = row_get(&item_row, "escalation_reason")?;
     if lifecycle_state != "open" {
         return Err(finalization_conflict("finalization_requires_open_item"));
     }
@@ -123,7 +121,7 @@ async fn apply_target_ref_advanced(
     let git_op_row = required(git_op_row)?;
 
     let previous_git_op_status: ingot_domain::git_operation::GitOperationStatus =
-        git_op_row.try_get("status").map_err(db_err)?;
+        row_get(&git_op_row, "status")?;
     if !matches!(
         previous_git_op_status,
         ingot_domain::git_operation::GitOperationStatus::Planned
@@ -332,7 +330,7 @@ async fn apply_checkout_adoption_succeeded(
     let convergence_row = required(convergence_row)?;
 
     let convergence_status: ingot_domain::convergence::ConvergenceStatus =
-        convergence_row.try_get("status").map_err(db_err)?;
+        row_get(&convergence_row, "status")?;
     if convergence_status != ingot_domain::convergence::ConvergenceStatus::Finalized {
         return Err(finalization_conflict(
             "finalization_requires_finalized_convergence",
@@ -352,12 +350,11 @@ async fn apply_checkout_adoption_succeeded(
     .map_err(db_err)?;
     let item_row = required(item_row)?;
 
-    let lifecycle_state: String = item_row.try_get("lifecycle_state").map_err(db_err)?;
+    let lifecycle_state: String = row_get(&item_row, "lifecycle_state")?;
     if lifecycle_state != "open" {
         return Err(finalization_conflict("finalization_requires_open_item"));
     }
-    let escalation_reason: Option<EscalationReason> =
-        item_row.try_get("escalation_reason").map_err(db_err)?;
+    let escalation_reason: Option<EscalationReason> = row_get(&item_row, "escalation_reason")?;
     let checkout_sync_escalated = escalation_reason == Some(EscalationReason::CheckoutSyncBlocked);
 
     let git_op_row = sqlx::query(
@@ -376,7 +373,7 @@ async fn apply_checkout_adoption_succeeded(
     let git_op_row = required(git_op_row)?;
 
     let previous_git_op_status: ingot_domain::git_operation::GitOperationStatus =
-        git_op_row.try_get("status").map_err(db_err)?;
+        row_get(&git_op_row, "status")?;
     if !matches!(
         previous_git_op_status,
         ingot_domain::git_operation::GitOperationStatus::Planned

@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId, WorkspaceId};
 use ingot_domain::ports::{RepositoryError, WorkspaceRepository};
 use ingot_domain::workspace::{Workspace, WorkspaceCommitState, WorkspaceState, WorkspaceStatus};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+};
 use crate::db::Database;
 
 impl Database {
@@ -178,31 +179,31 @@ impl WorkspaceRepository for Database {
 }
 
 fn map_workspace(row: &SqliteRow) -> Result<Workspace, RepositoryError> {
-    let status: WorkspaceStatus = row.try_get("status").map_err(db_err)?;
-    let current_job_id = row.try_get("current_job_id").map_err(db_err)?;
+    let status: WorkspaceStatus = row_get(row, "status")?;
+    let current_job_id = row_get(row, "current_job_id")?;
     let state = WorkspaceState::from_parts(
         status,
         WorkspaceCommitState::from_option_parts(
-            row.try_get("base_commit_oid").map_err(db_err)?,
-            row.try_get("head_commit_oid").map_err(db_err)?,
+            row_get(row, "base_commit_oid")?,
+            row_get(row, "head_commit_oid")?,
         ),
         current_job_id,
     )
     .map_err(|error| db_err(std::io::Error::other(error)))?;
 
     Ok(Workspace {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        kind: row.try_get("kind").map_err(db_err)?,
-        strategy: row.try_get("strategy").map_err(db_err)?,
-        path: PathBuf::from(row.try_get::<String, _>("path").map_err(db_err)?),
-        created_for_revision_id: row.try_get("created_for_revision_id").map_err(db_err)?,
-        parent_workspace_id: row.try_get("parent_workspace_id").map_err(db_err)?,
-        target_ref: row.try_get("target_ref").map_err(db_err)?,
-        workspace_ref: row.try_get("workspace_ref").map_err(db_err)?,
-        retention_policy: row.try_get("retention_policy").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        updated_at: row.try_get("updated_at").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        kind: row_get(row, "kind")?,
+        strategy: row_get(row, "strategy")?,
+        path: PathBuf::from(row_get::<String>(row, "path")?),
+        created_for_revision_id: row_get(row, "created_for_revision_id")?,
+        parent_workspace_id: row_get(row, "parent_workspace_id")?,
+        target_ref: row_get(row, "target_ref")?,
+        workspace_ref: row_get(row, "workspace_ref")?,
+        retention_policy: row_get(row, "retention_policy")?,
+        created_at: row_get(row, "created_at")?,
+        updated_at: row_get(row, "updated_at")?,
         state,
     })
 }

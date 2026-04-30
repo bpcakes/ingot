@@ -1,5 +1,6 @@
 mod autopilot;
 mod bootstrap;
+mod completion;
 mod convergence;
 mod dispatch;
 mod execution;
@@ -42,6 +43,7 @@ use ingot_workspace::WorkspaceError;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+pub(crate) use completion::{ReportCompletion, ReportCompletionError};
 pub(crate) use job_support::{
     PrepareRunOutcome, PreparedRun, WorkspaceLifecycle, built_in_template, commit_subject,
     failure_escalation_reason, format_revision_context,

@@ -1,10 +1,9 @@
 use ingot_domain::activity::{Activity, ActivitySubject};
 use ingot_domain::ids::ProjectId;
 use ingot_domain::ports::{ActivityRepository, ConflictKind, RepositoryError};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, json_err, parse_json};
+use super::helpers::{db_err, db_write_err, json_err, row_get, row_get_json};
 use crate::db::Database;
 
 impl Database {
@@ -68,19 +67,19 @@ impl ActivityRepository for Database {
 }
 
 fn map_activity(row: &SqliteRow) -> Result<Activity, RepositoryError> {
-    let entity_type = row.try_get("entity_type").map_err(db_err)?;
-    let entity_id: String = row.try_get("entity_id").map_err(db_err)?;
+    let entity_type = row_get(row, "entity_type")?;
+    let entity_id: String = row_get(row, "entity_id")?;
     let subject = ActivitySubject::from_parts(entity_type, &entity_id).map_err(|e| {
         RepositoryError::Conflict(ConflictKind::Other(format!(
             "invalid activity subject: {e}"
         )))
     })?;
     Ok(Activity {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        event_type: row.try_get("event_type").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        event_type: row_get(row, "event_type")?,
         subject,
-        payload: parse_json(row.try_get("payload").map_err(db_err)?)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        payload: row_get_json(row, "payload")?,
+        created_at: row_get(row, "created_at")?,
     })
 }

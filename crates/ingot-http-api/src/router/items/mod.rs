@@ -1,52 +1,34 @@
-mod revisions;
-
-pub(super) use revisions::{
-    build_superseding_revision, resolve_seed_target_commit_oid, validate_seed_commit_oid,
-};
-
-use super::dispatch::auto_dispatch_projected_review_job_locked;
-use super::item_projection::{
-    evaluate_item_snapshot, load_item_detail, load_item_runtime_snapshot,
-};
-use super::support::{
-    activity::append_activity,
-    config::load_effective_config,
-    errors::{
-        ensure_git_valid_target_ref, repo_to_internal, repo_to_item, repo_to_project,
-        target_ref_parse_to_api_error,
-    },
-    path::ApiPath,
-    sort_key::next_project_sort_key,
-};
-use super::types::*;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::Utc;
-use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::activity::ActivityEventType;
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::finding::Finding;
-use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{ItemId, ProjectId};
-use ingot_domain::item::{
-    ApprovalState, Classification, DoneReason, Escalation, Item, Lifecycle, Priority,
-    ResolutionSource,
-};
+use ingot_domain::item::DoneReason;
 use ingot_domain::job::Job;
-use ingot_domain::ports::ProjectMutationLockPort;
-use ingot_domain::revision::{AuthoringBaseSeed, ItemRevision};
+use ingot_domain::revision::ItemRevision;
 use ingot_usecases::UseCaseError;
-use ingot_usecases::item::{
-    CreateInvestigationInput, CreateItemInput, approval_state_for_policy,
-    create_investigation_item, create_manual_item,
-};
+use ingot_usecases::item_commands as item_uc;
 use ingot_workflow::Evaluator;
 use tracing::warn;
 
 use crate::error::ApiError;
+pub(super) use revisions::build_superseding_revision;
 
-use super::app::{AppState, teardown_revision_lane_state};
+use super::app::AppState;
+use super::item_projection::{
+    evaluate_item_snapshot, load_item_detail, load_item_runtime_snapshot,
+};
+use super::support::{
+    config::load_effective_config,
+    errors::{repo_to_internal, repo_to_item, repo_to_project},
+    path::ApiPath,
+};
+use super::types::*;
+
+mod revisions;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -98,96 +80,32 @@ pub(super) async fn create_item(
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
     let config = load_effective_config(Some(&project))?;
-    let configured_approval_policy = config.defaults.approval_policy;
-
-    let target_ref = GitRef::parse_target_ref(
-        request
-            .target_ref
-            .as_ref()
-            .map(GitRef::as_str)
-            .unwrap_or(project.default_branch.as_str()),
-    )
-    .map_err(target_ref_parse_to_api_error)?;
-    ensure_git_valid_target_ref(target_ref.as_str()).await?;
-    let infra = state.infra();
-    let resolved_target_head = infra
-        .resolve_project_ref_oid(project.id, &target_ref)
-        .await?
-        .ok_or_else(|| UseCaseError::TargetRefUnresolved(target_ref.to_string()))?;
-
-    let sort_key = next_project_sort_key(&state, project_id).await?;
-    let classification = request.classification.unwrap_or(Classification::Change);
-
-    let (item, revision) = if classification == Classification::Investigation {
-        create_investigation_item(
-            &project,
-            CreateInvestigationInput {
-                title: request.title,
-                description: request.description,
-                target_ref,
-                priority: request.priority.unwrap_or(Priority::Major),
-                labels: request.labels.unwrap_or_default(),
-                operator_notes: request.operator_notes,
-                target_ref_head: resolved_target_head,
-            },
-            sort_key,
-            Utc::now(),
-        )
-    } else {
-        let seed_commit_oid =
-            validate_seed_commit_oid(&infra, project.id, request.seed_commit_oid).await?;
-        let seed_target_commit_oid = resolve_seed_target_commit_oid(
-            &infra,
-            project.id,
-            request.seed_target_commit_oid,
-            resolved_target_head,
-        )
-        .await?;
-        let seed = AuthoringBaseSeed::from_parts(seed_commit_oid, seed_target_commit_oid);
-
-        create_manual_item(
-            &project,
-            CreateItemInput {
-                classification,
-                priority: request.priority.unwrap_or(Priority::Major),
-                labels: request.labels.unwrap_or_default(),
-                operator_notes: request.operator_notes,
-                title: request.title,
-                description: request.description,
-                acceptance_criteria: request.acceptance_criteria,
-                target_ref,
-                approval_policy: request
-                    .approval_policy
-                    .unwrap_or(configured_approval_policy),
-                candidate_rework_budget: config.defaults.candidate_rework_budget,
-                integration_rework_budget: config.defaults.integration_rework_budget,
-                seed,
-            },
-            sort_key,
-            Utc::now(),
-        )
-    };
-
-    state
-        .db
-        .create_item_with_revision(&item, &revision)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
-        project_id,
-        ActivityEventType::ItemCreated,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({ "revision_id": revision.id }),
+    let output = item_uc::create_item(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
+        item_uc::CreateItemCommand {
+            project_id,
+            title: request.title,
+            description: request.description,
+            acceptance_criteria: request.acceptance_criteria,
+            classification: request.classification,
+            priority: request.priority,
+            labels: request.labels,
+            operator_notes: request.operator_notes,
+            target_ref: request.target_ref,
+            approval_policy: request.approval_policy,
+            seed_commit_oid: request.seed_commit_oid,
+            seed_target_commit_oid: request.seed_target_commit_oid,
+            default_approval_policy: config.defaults.approval_policy,
+            candidate_rework_budget: config.defaults.candidate_rework_budget,
+            integration_rework_budget: config.defaults.integration_rework_budget,
+        },
     )
     .await?;
 
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok((StatusCode::CREATED, Json(detail)))
 }
 
@@ -234,46 +152,20 @@ pub(super) async fn update_item(
     }): ApiPath<ProjectItemPathParams>,
     Json(request): Json<UpdateItemRequest>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
-    let _project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    if let Some(classification) = request.classification {
-        item.classification = classification;
-    }
-    if let Some(priority) = request.priority {
-        item.priority = priority;
-    }
-    if let Some(labels) = request.labels {
-        item.labels = labels;
-    }
-    if request.operator_notes.is_some() {
-        item.operator_notes = request.operator_notes;
-    }
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
-        project_id,
-        ActivityEventType::ItemUpdated,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({}),
+    let output = item_uc::update_item(
+        &state.db,
+        &state.project_locks,
+        item_uc::UpdateItemCommand {
+            project_id,
+            item_id,
+            classification: request.classification,
+            priority: request.priority,
+            labels: request.labels,
+            operator_notes: request.operator_notes,
+        },
     )
     .await?;
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
 }
 
@@ -304,68 +196,16 @@ pub(super) async fn revise_item(
     let request: ReviseItemRequest = maybe_request
         .map(|Json(request)| request)
         .unwrap_or_default();
-    let project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    ensure_item_open_idle(&item)?;
-    let current_revision = state
-        .db
-        .get_revision(item.current_revision_id)
-        .await
-        .map_err(repo_to_internal)?;
-    let _ = teardown_revision_lane_state(&state, &project, item.id, &current_revision).await?;
-    let jobs = state
-        .db
-        .list_jobs_by_item(item.id)
-        .await
-        .map_err(repo_to_internal)?;
-    let next_revision =
-        build_superseding_revision(&state, &project, &item, &current_revision, &jobs, request)
-            .await?;
-    state
-        .db
-        .create_revision(&next_revision)
-        .await
-        .map_err(repo_to_internal)?;
-    item.current_revision_id = next_revision.id;
-    let cleared_escalation = item.escalation.is_escalated();
-    item.approval_state = approval_state_for_policy(next_revision.approval_policy);
-    item.escalation = Escalation::None;
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
+    let output = item_uc::revise_item(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
         project_id,
-        ActivityEventType::ItemRevisionCreated,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({ "revision_id": next_revision.id, "kind": "revise" }),
+        item_id,
+        revise_command(request),
     )
     .await?;
-    if cleared_escalation {
-        append_activity(
-            &state,
-            project_id,
-            ActivityEventType::ItemEscalationCleared,
-            ActivitySubject::Item(item.id),
-            serde_json::json!({ "reason": "revise" }),
-        )
-        .await?;
-    }
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
 }
 
@@ -376,50 +216,15 @@ pub(super) async fn defer_item(
         item_id,
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
-    let project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    ensure_item_open_idle(&item)?;
-    if item.approval_state == ApprovalState::Pending {
-        return Err(ApiError::Conflict {
-            code: "item_pending_approval",
-            message: "Pending approval items cannot be deferred".into(),
-        });
-    }
-    let current_revision = state
-        .db
-        .get_revision(item.current_revision_id)
-        .await
-        .map_err(repo_to_internal)?;
-    let _ = teardown_revision_lane_state(&state, &project, item.id, &current_revision).await?;
-    item.parking_state = ingot_domain::item::ParkingState::Deferred;
-    item.approval_state = approval_state_for_policy(current_revision.approval_policy);
-    item.escalation = Escalation::None;
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
+    let output = item_uc::defer_item(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
         project_id,
-        ActivityEventType::ItemDeferred,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({}),
+        item_id,
     )
     .await?;
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
 }
 
@@ -430,49 +235,23 @@ pub(super) async fn resume_item(
         item_id,
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
-    let project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    if item.parking_state != ingot_domain::item::ParkingState::Deferred {
-        return Err(ApiError::Conflict {
-            code: "item_not_deferred",
-            message: "Item is not deferred".into(),
-        });
-    }
-    item.parking_state = ingot_domain::item::ParkingState::Active;
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
+    let (output, dispatch_result) = item_uc::resume_item(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
         project_id,
-        ActivityEventType::ItemResumed,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({}),
+        item_id,
     )
     .await?;
-    if let Err(error) = auto_dispatch_projected_review_job_locked(&state, &project, item.id).await {
+    if let Err(error) = dispatch_result {
         warn!(
             ?error,
             project_id = %project_id,
-            item_id = %item.id,
+            item_id = %output.item_id,
             "projected review auto-dispatch failed after resume"
         );
     }
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
 }
 
@@ -521,84 +300,16 @@ pub(super) async fn reopen_item(
     let request: ReviseItemRequest = maybe_request
         .map(|Json(request)| request)
         .unwrap_or_default();
-    let project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    match item.lifecycle {
-        Lifecycle::Done {
-            reason: DoneReason::Dismissed | DoneReason::Invalidated,
-            ..
-        } => {}
-        Lifecycle::Done {
-            reason: DoneReason::Completed,
-            ..
-        } => return Err(UseCaseError::CompletedItemCannotReopen.into()),
-        Lifecycle::Open => {
-            return Err(ApiError::Conflict {
-                code: "item_not_reopenable",
-                message: "Only dismissed or invalidated items can be reopened".into(),
-            });
-        }
-    }
-    let current_revision = state
-        .db
-        .get_revision(item.current_revision_id)
-        .await
-        .map_err(repo_to_internal)?;
-    let jobs = state
-        .db
-        .list_jobs_by_item(item.id)
-        .await
-        .map_err(repo_to_internal)?;
-    let next_revision =
-        build_superseding_revision(&state, &project, &item, &current_revision, &jobs, request)
-            .await?;
-    state
-        .db
-        .create_revision(&next_revision)
-        .await
-        .map_err(repo_to_internal)?;
-    let cleared_escalation = item.escalation.is_escalated();
-    item.current_revision_id = next_revision.id;
-    item.lifecycle = Lifecycle::Open;
-    item.parking_state = ingot_domain::item::ParkingState::Active;
-    item.approval_state = approval_state_for_policy(next_revision.approval_policy);
-    item.escalation = Escalation::None;
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
+    let output = item_uc::reopen_item(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
         project_id,
-        ActivityEventType::ItemReopened,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({ "revision_id": next_revision.id }),
+        item_id,
+        revise_command(request),
     )
     .await?;
-    if cleared_escalation {
-        append_activity(
-            &state,
-            project_id,
-            ActivityEventType::ItemEscalationCleared,
-            ActivitySubject::Item(item.id),
-            serde_json::json!({ "reason": "reopen" }),
-        )
-        .await?;
-    }
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
 }
 
@@ -626,16 +337,6 @@ pub(super) async fn list_item_findings(
         .map_err(repo_to_internal)?;
 
     Ok(Json(findings))
-}
-
-pub(super) fn ensure_item_open_idle(item: &Item) -> Result<(), ApiError> {
-    if !item.lifecycle.is_open() {
-        return Err(UseCaseError::ItemNotOpen.into());
-    }
-    if item.parking_state != ingot_domain::item::ParkingState::Active {
-        return Err(UseCaseError::ItemNotIdle.into());
-    }
-    Ok(())
 }
 
 #[derive(Default)]
@@ -673,49 +374,30 @@ pub(super) async fn finish_item_manually(
     done_reason: DoneReason,
     event_type: ActivityEventType,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
-    let project = state
-        .db
-        .get_project(project_id)
-        .await
-        .map_err(repo_to_project)?;
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project_id)
-        .await;
-    let mut item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project_id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-    ensure_item_open_idle(&item)?;
-    let revision = state
-        .db
-        .get_revision(item.current_revision_id)
-        .await
-        .map_err(repo_to_internal)?;
-    let _ = teardown_revision_lane_state(&state, &project, item.id, &revision).await?;
-    item.lifecycle = Lifecycle::Done {
-        reason: done_reason,
-        source: ResolutionSource::ManualCommand,
-        closed_at: Utc::now(),
-    };
-    item.approval_state = approval_state_for_policy(revision.approval_policy);
-    item.escalation = Escalation::None;
-    item.updated_at = Utc::now();
-    state
-        .db
-        .update_item(&item)
-        .await
-        .map_err(repo_to_internal)?;
-    append_activity(
-        &state,
+    let output = item_uc::finish_item_manually(
+        &state.db,
+        &state.infra(),
+        &state.project_locks,
         project_id,
+        item_id,
+        done_reason,
         event_type,
-        ActivitySubject::Item(item.id),
-        serde_json::json!({ "done_reason": item.lifecycle.done_reason() }),
     )
     .await?;
-    let detail = load_item_detail(&state, project_id, item.id).await?;
+    let detail = load_item_detail(&state, project_id, output.item_id).await?;
     Ok(Json(detail))
+}
+
+fn revise_command(request: ReviseItemRequest) -> item_uc::ReviseItemCommand {
+    item_uc::ReviseItemCommand {
+        title: request.title,
+        description: request.description,
+        acceptance_criteria: request.acceptance_criteria,
+        target_ref: request.target_ref,
+        approval_policy: request.approval_policy,
+        seed_commit_oid: request.seed_commit_oid,
+        seed_target_commit_oid: request.seed_target_commit_oid,
+    }
 }
 
 pub(super) async fn current_authoring_head_for_revision_with_workspace(

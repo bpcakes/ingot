@@ -2,11 +2,11 @@ use ingot_domain::git_operation::{GitOperation, GitOperationWire};
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::ConvergenceId;
 use ingot_domain::ports::{ConflictKind, GitOperationRepository, RepositoryError};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, parse_json,
+    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, row_get,
+    row_get_optional_json,
 };
 use crate::db::Database;
 
@@ -164,24 +164,20 @@ impl GitOperationRepository for Database {
 
 fn map_git_operation(row: &SqliteRow) -> Result<GitOperation, RepositoryError> {
     let wire = GitOperationWire {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        operation_kind: row.try_get("operation_kind").map_err(db_err)?,
-        entity_type: row.try_get("entity_type").map_err(db_err)?,
-        entity_id: row.try_get("entity_id").map_err(db_err)?,
-        workspace_id: row.try_get("workspace_id").map_err(db_err)?,
-        ref_name: row.try_get("ref_name").map_err(db_err)?,
-        expected_old_oid: row.try_get("expected_old_oid").map_err(db_err)?,
-        new_oid: row.try_get("new_oid").map_err(db_err)?,
-        commit_oid: row.try_get("commit_oid").map_err(db_err)?,
-        status: row.try_get("status").map_err(db_err)?,
-        metadata: row
-            .try_get::<Option<String>, _>("metadata")
-            .map_err(db_err)?
-            .map(parse_json)
-            .transpose()?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        completed_at: row.try_get("completed_at").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        operation_kind: row_get(row, "operation_kind")?,
+        entity_type: row_get(row, "entity_type")?,
+        entity_id: row_get(row, "entity_id")?,
+        workspace_id: row_get(row, "workspace_id")?,
+        ref_name: row_get(row, "ref_name")?,
+        expected_old_oid: row_get(row, "expected_old_oid")?,
+        new_oid: row_get(row, "new_oid")?,
+        commit_oid: row_get(row, "commit_oid")?,
+        status: row_get(row, "status")?,
+        metadata: row_get_optional_json(row, "metadata")?,
+        created_at: row_get(row, "created_at")?,
+        completed_at: row_get(row, "completed_at")?,
     };
     GitOperation::try_from(wire).map_err(|e| {
         RepositoryError::Conflict(ConflictKind::Other(format!("invalid git operation: {e}")))

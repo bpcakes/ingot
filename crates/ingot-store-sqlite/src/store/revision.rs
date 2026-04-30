@@ -5,12 +5,13 @@ use ingot_domain::ports::{
 };
 use ingot_domain::revision::{AuthoringBaseSeed, ItemRevision};
 use ingot_domain::revision_context::RevisionContext;
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::item::insert_revision_query;
 
-use super::helpers::{db_err, db_write_err, json_err, map_optional_row, parse_json, required_row};
+use super::helpers::{
+    db_err, db_write_err, json_err, map_optional_row, required_row, row_get, row_get_json,
+};
 use crate::db::Database;
 
 impl Database {
@@ -115,11 +116,9 @@ impl RevisionContextRepository for Database {
 }
 
 fn map_revision(row: &SqliteRow) -> Result<ItemRevision, RepositoryError> {
-    let seed_commit_oid: Option<CommitOid> = row.try_get("seed_commit_oid").map_err(db_err)?;
-    let seed_target_commit_oid: CommitOid = row
-        .try_get::<Option<CommitOid>, _>("seed_target_commit_oid")
-        .map_err(db_err)?
-        .ok_or_else(|| {
+    let seed_commit_oid: Option<CommitOid> = row_get(row, "seed_commit_oid")?;
+    let seed_target_commit_oid: CommitOid =
+        row_get::<Option<CommitOid>>(row, "seed_target_commit_oid")?.ok_or_else(|| {
             RepositoryError::Conflict(ConflictKind::Other(
                 "seed_target_commit_oid must not be NULL".into(),
             ))
@@ -127,28 +126,28 @@ fn map_revision(row: &SqliteRow) -> Result<ItemRevision, RepositoryError> {
     let seed = AuthoringBaseSeed::from_parts(seed_commit_oid, seed_target_commit_oid);
 
     Ok(ItemRevision {
-        id: row.try_get("id").map_err(db_err)?,
-        item_id: row.try_get("item_id").map_err(db_err)?,
-        revision_no: row.try_get::<i64, _>("revision_no").map_err(db_err)? as u32,
-        title: row.try_get("title").map_err(db_err)?,
-        description: row.try_get("description").map_err(db_err)?,
-        acceptance_criteria: row.try_get("acceptance_criteria").map_err(db_err)?,
-        target_ref: row.try_get("target_ref").map_err(db_err)?,
-        approval_policy: row.try_get("approval_policy").map_err(db_err)?,
-        policy_snapshot: parse_json(row.try_get("policy_snapshot").map_err(db_err)?)?,
-        template_map_snapshot: parse_json(row.try_get("template_map_snapshot").map_err(db_err)?)?,
+        id: row_get(row, "id")?,
+        item_id: row_get(row, "item_id")?,
+        revision_no: row_get::<i64>(row, "revision_no")? as u32,
+        title: row_get(row, "title")?,
+        description: row_get(row, "description")?,
+        acceptance_criteria: row_get(row, "acceptance_criteria")?,
+        target_ref: row_get(row, "target_ref")?,
+        approval_policy: row_get(row, "approval_policy")?,
+        policy_snapshot: row_get_json(row, "policy_snapshot")?,
+        template_map_snapshot: row_get_json(row, "template_map_snapshot")?,
         seed,
-        supersedes_revision_id: row.try_get("supersedes_revision_id").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        supersedes_revision_id: row_get(row, "supersedes_revision_id")?,
+        created_at: row_get(row, "created_at")?,
     })
 }
 
 fn map_revision_context(row: &SqliteRow) -> Result<RevisionContext, RepositoryError> {
     Ok(RevisionContext {
-        item_revision_id: row.try_get("item_revision_id").map_err(db_err)?,
-        schema_version: row.try_get("schema_version").map_err(db_err)?,
-        payload: parse_json(row.try_get("payload").map_err(db_err)?)?,
-        updated_from_job_id: row.try_get("updated_from_job_id").map_err(db_err)?,
-        updated_at: row.try_get("updated_at").map_err(db_err)?,
+        item_revision_id: row_get(row, "item_revision_id")?,
+        schema_version: row_get(row, "schema_version")?,
+        payload: row_get_json(row, "payload")?,
+        updated_from_job_id: row_get(row, "updated_from_job_id")?,
+        updated_at: row_get(row, "updated_at")?,
     })
 }

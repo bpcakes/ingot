@@ -10,6 +10,12 @@ pub enum UseCaseError {
     ItemNotOpen,
     #[error("item not idle")]
     ItemNotIdle,
+    #[error("item is not deferred")]
+    ItemNotDeferred,
+    #[error("item is not reopenable")]
+    ItemNotReopenable,
+    #[error("pending approval items cannot be deferred")]
+    PendingApprovalCannotDefer,
     #[error("approval not pending")]
     ApprovalNotPending,
     #[error("convergence is not preparable")]

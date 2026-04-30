@@ -12,7 +12,6 @@ use ingot_domain::git_operation::{
     GitOperation, GitOperationEntityRef, GitOperationStatus, OperationPayload,
 };
 use ingot_domain::ids::{GitOperationId, JobId};
-use ingot_domain::item::ApprovalState;
 use ingot_domain::job::{ExecutionPermission, Job, JobStatus, OutcomeClass, OutputArtifactKind};
 use ingot_domain::ports::FinishJobNonSuccessParams;
 use ingot_domain::ports::{
@@ -20,13 +19,12 @@ use ingot_domain::ports::{
 };
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
-use ingot_domain::step_id::StepId;
 use ingot_domain::workspace::{Workspace, WorkspaceStatus};
 use ingot_git::commands::{git, head_oid, resolve_ref_oid};
 use ingot_git::commit::{JobCommitTrailers, create_daemon_job_commit, working_tree_has_changes};
 use ingot_git::diff::changed_paths_between;
 use ingot_store_sqlite::ClaimQueuedAgentJobExecutionParams;
-use ingot_usecases::{CompleteJobCommand, rebuild_revision_context};
+use ingot_usecases::rebuild_revision_context;
 use ingot_workspace::remove_workspace;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
@@ -35,9 +33,9 @@ use tokio::time::interval;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::{
-    JobDispatcher, PreparedRun, RunningJobResult, RuntimeError, WorkspaceLifecycle, commit_subject,
-    failure_escalation_reason, non_empty_message, outcome_class_name, report,
-    should_clear_item_escalation_on_success,
+    JobDispatcher, PreparedRun, ReportCompletion, ReportCompletionError, RunningJobResult,
+    RuntimeError, WorkspaceLifecycle, commit_subject, failure_escalation_reason, non_empty_message,
+    report, should_clear_item_escalation_on_success,
 };
 
 pub(crate) enum AgentRunOutcome {
@@ -544,64 +542,40 @@ impl JobDispatcher {
                 RuntimeError::InvalidState("report job missing schema version mapping".into())
             })?;
 
-        if let Err(error) = self
-            .complete_job_service()
-            .execute(CompleteJobCommand {
-                job_id: prepared.job.id,
-                outcome_class,
-                result_schema_version: Some(result_schema_version.to_string()),
-                result_payload: Some(result_payload),
-                output_commit_oid: None,
-            })
-            .await
-        {
-            return self
-                .fail_run(
-                    &prepared,
-                    OutcomeClass::ProtocolViolation,
-                    "report_completion_rejected",
-                    Some(format!("{error:?}")),
-                )
-                .await;
+        let completion_result = self
+            .complete_report_with_finalizers(
+                ReportCompletion {
+                    job_id: prepared.job.id,
+                    item_id: prepared.item.id,
+                    project_id: prepared.project.id,
+                    step_id: prepared.job.step_id,
+                    outcome_class,
+                    result_schema_version: result_schema_version.to_string(),
+                    result_payload,
+                    output_commit_oid: None,
+                },
+                || async { self.finalize_workspace_after_success(&prepared, None).await },
+                || async { self.refresh_revision_context(&prepared).await },
+                || async {
+                    self.append_escalation_cleared_activity_if_needed(&prepared)
+                        .await
+                },
+            )
+            .await;
+        if let Err(error) = completion_result {
+            return match error {
+                ReportCompletionError::CompletionRejected(error) => {
+                    self.fail_run(
+                        &prepared,
+                        OutcomeClass::ProtocolViolation,
+                        "report_completion_rejected",
+                        Some(format!("{error:?}")),
+                    )
+                    .await
+                }
+                ReportCompletionError::Runtime(error) => Err(error),
+            };
         }
-        self.append_activity(
-            prepared.project.id,
-            ActivityEventType::JobCompleted,
-            ActivitySubject::Job(prepared.job.id),
-            serde_json::json!({ "item_id": prepared.item.id, "outcome": outcome_class_name(outcome_class) }),
-        )
-        .await?;
-        if prepared.job.step_id == StepId::ValidateIntegrated
-            && outcome_class == OutcomeClass::Clean
-        {
-            let updated_item = self.db.get_item(prepared.item.id).await?;
-            if updated_item.approval_state == ApprovalState::Pending {
-                self.append_activity(
-                    prepared.project.id,
-                    ActivityEventType::ApprovalRequested,
-                    ActivitySubject::Item(prepared.item.id),
-                    serde_json::json!({ "job_id": prepared.job.id }),
-                )
-                .await?;
-            }
-        }
-
-        if outcome_class == OutcomeClass::Findings {
-            let project = self.db.get_project(prepared.project.id).await?;
-            if project.execution_mode == ingot_domain::project::ExecutionMode::Autopilot {
-                let item = self.db.get_item(prepared.item.id).await?;
-                self.auto_triage_job_findings(&project, prepared.job.id, &item)
-                    .await?;
-            }
-        }
-
-        self.finalize_workspace_after_success(&prepared, None)
-            .await?;
-        self.refresh_revision_context(&prepared).await?;
-        self.append_escalation_cleared_activity_if_needed(&prepared)
-            .await?;
-        self.auto_dispatch_projected_review(prepared.project.id, prepared.item.id)
-            .await?;
         info!(
             job_id = %prepared.job.id,
             step_id = %prepared.job.step_id,

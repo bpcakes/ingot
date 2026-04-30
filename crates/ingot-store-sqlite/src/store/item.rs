@@ -2,11 +2,10 @@ use ingot_domain::ids::{ItemId, ProjectId};
 use ingot_domain::item::{Escalation, Item, Lifecycle, Origin};
 use ingot_domain::ports::{ItemRepository, RepositoryError};
 use ingot_domain::revision::ItemRevision;
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, parse_json, required_row,
+    db_err, db_write_err, ensure_rows_affected, json_err, required_row, row_get, row_get_json,
 };
 use crate::db::Database;
 
@@ -185,64 +184,52 @@ pub(crate) fn insert_item_query<'a>(item: &'a Item) -> Result<SqliteQuery<'a>, R
 
 fn map_item(row: &SqliteRow) -> Result<Item, RepositoryError> {
     Ok(Item {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        classification: row.try_get("classification").map_err(db_err)?,
-        workflow_version: row.try_get("workflow_version").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        classification: row_get(row, "classification")?,
+        workflow_version: row_get(row, "workflow_version")?,
         lifecycle: parse_lifecycle(row)?,
-        parking_state: row.try_get("parking_state").map_err(db_err)?,
-        approval_state: row.try_get("approval_state").map_err(db_err)?,
+        parking_state: row_get(row, "parking_state")?,
+        approval_state: row_get(row, "approval_state")?,
         escalation: parse_escalation(row)?,
-        current_revision_id: row.try_get("current_revision_id").map_err(db_err)?,
+        current_revision_id: row_get(row, "current_revision_id")?,
         origin: parse_origin(row)?,
-        priority: row.try_get("priority").map_err(db_err)?,
-        labels: parse_json(row.try_get("labels").map_err(db_err)?)?,
-        operator_notes: row.try_get("operator_notes").map_err(db_err)?,
-        sort_key: row.try_get("sort_key").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        updated_at: row.try_get("updated_at").map_err(db_err)?,
+        priority: row_get(row, "priority")?,
+        labels: row_get_json(row, "labels")?,
+        operator_notes: row_get(row, "operator_notes")?,
+        sort_key: row_get(row, "sort_key")?,
+        created_at: row_get(row, "created_at")?,
+        updated_at: row_get(row, "updated_at")?,
     })
 }
 
 fn parse_lifecycle(row: &SqliteRow) -> Result<Lifecycle, RepositoryError> {
-    match row
-        .try_get::<String, _>("lifecycle_state")
-        .map_err(db_err)?
-        .as_str()
-    {
+    match row_get::<String>(row, "lifecycle_state")?.as_str() {
         "open" => Ok(Lifecycle::Open),
         "done" => Ok(Lifecycle::Done {
-            reason: row.try_get("done_reason").map_err(db_err)?,
-            source: row.try_get("resolution_source").map_err(db_err)?,
-            closed_at: row.try_get("closed_at").map_err(db_err)?,
+            reason: row_get(row, "done_reason")?,
+            source: row_get(row, "resolution_source")?,
+            closed_at: row_get(row, "closed_at")?,
         }),
         other => invalid_state("lifecycle_state", other),
     }
 }
 
 fn parse_escalation(row: &SqliteRow) -> Result<Escalation, RepositoryError> {
-    match row
-        .try_get::<String, _>("escalation_state")
-        .map_err(db_err)?
-        .as_str()
-    {
+    match row_get::<String>(row, "escalation_state")?.as_str() {
         "none" => Ok(Escalation::None),
         "operator_required" => Ok(Escalation::OperatorRequired {
-            reason: row.try_get("escalation_reason").map_err(db_err)?,
+            reason: row_get(row, "escalation_reason")?,
         }),
         other => invalid_state("escalation_state", other),
     }
 }
 
 fn parse_origin(row: &SqliteRow) -> Result<Origin, RepositoryError> {
-    match row
-        .try_get::<String, _>("origin_kind")
-        .map_err(db_err)?
-        .as_str()
-    {
+    match row_get::<String>(row, "origin_kind")?.as_str() {
         "manual" => Ok(Origin::Manual),
         "promoted_finding" => Ok(Origin::PromotedFinding {
-            finding_id: row.try_get("origin_finding_id").map_err(db_err)?,
+            finding_id: row_get(row, "origin_finding_id")?,
         }),
         other => invalid_state("origin_kind", other),
     }

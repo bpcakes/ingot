@@ -1,8 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::json;
-
 use ingot_usecases::UseCaseError;
+use serde_json::json;
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -59,6 +58,21 @@ impl IntoResponse for ApiError {
                     StatusCode::CONFLICT,
                     "item_not_idle",
                     "Item is not idle".into(),
+                ),
+                UseCaseError::ItemNotDeferred => (
+                    StatusCode::CONFLICT,
+                    "item_not_deferred",
+                    "Item is not deferred".into(),
+                ),
+                UseCaseError::ItemNotReopenable => (
+                    StatusCode::CONFLICT,
+                    "item_not_reopenable",
+                    "Only dismissed or invalidated items can be reopened".into(),
+                ),
+                UseCaseError::PendingApprovalCannotDefer => (
+                    StatusCode::CONFLICT,
+                    "item_pending_approval",
+                    "Pending approval items cannot be deferred".into(),
                 ),
                 UseCaseError::ApprovalNotPending => (
                     StatusCode::CONFLICT,

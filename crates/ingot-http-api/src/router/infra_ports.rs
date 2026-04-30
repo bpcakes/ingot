@@ -10,23 +10,22 @@ use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::{Workspace, WorkspaceKind};
 use ingot_git::commands::FinalizeTargetRefOutcome;
 use ingot_git::diff::changed_paths_between;
-use ingot_git::project_repo::ProjectRepoPaths;
 use ingot_git::project_repo::{
-    CheckoutFinalizationStatus, checkout_finalization_status, refresh_project_mirror_for_project,
-    sync_checkout_to_commit,
+    CheckoutFinalizationStatus, ProjectRepoPaths, checkout_finalization_status,
+    refresh_project_mirror_for_project, sync_checkout_to_commit,
 };
-use ingot_usecases::UseCaseError;
-use ingot_usecases::dispatch::DispatchInfraPort;
-use ingot_usecases::workspace::WorkspaceInfraPort;
+use ingot_usecases::{
+    UseCaseError, application::ApplicationInfraPort, dispatch::DispatchInfraPort,
+    workspace::WorkspaceInfraPort,
+};
 use ingot_workspace::ensure_authoring_workspace_state;
 
-use super::AppState;
-use super::support::errors::{git_to_internal, repo_to_internal, workspace_to_api_error};
 use crate::error::ApiError;
 
-fn api_to_uc(err: crate::error::ApiError) -> UseCaseError {
-    UseCaseError::Internal(format!("{err:?}"))
-}
+use super::AppState;
+use super::support::errors::{
+    ensure_git_valid_target_ref, git_to_internal, repo_to_internal, workspace_to_api_error,
+};
 
 /// Adapter bridging infrastructure (ingot-git, ingot-workspace) to the
 /// `DispatchInfraPort` / `WorkspaceInfraPort` traits defined in ingot-usecases.
@@ -311,6 +310,72 @@ impl DispatchInfraPort for HttpInfraAdapter {
     }
 }
 
+impl ApplicationInfraPort for HttpInfraAdapter {
+    async fn ensure_valid_target_ref(&self, target_ref: &str) -> Result<(), UseCaseError> {
+        ensure_git_valid_target_ref(target_ref)
+            .await
+            .map_err(api_to_uc)
+    }
+
+    async fn refresh_project_mirror(&self, project: &Project) -> Result<(), UseCaseError> {
+        HttpInfraAdapter::refresh_project_mirror(self, project)
+            .await
+            .map(|_| ())
+            .map_err(api_to_uc)
+    }
+
+    async fn resolve_project_ref_oid(
+        &self,
+        project_id: ProjectId,
+        ref_name: &GitRef,
+    ) -> Result<Option<CommitOid>, UseCaseError> {
+        HttpInfraAdapter::resolve_project_ref_oid(self, project_id, ref_name)
+            .await
+            .map_err(api_to_uc)
+    }
+
+    async fn is_commit_reachable_from_any_ref(
+        &self,
+        project_id: ProjectId,
+        commit_oid: &CommitOid,
+    ) -> Result<bool, UseCaseError> {
+        HttpInfraAdapter::is_commit_reachable_from_any_ref(self, project_id, commit_oid)
+            .await
+            .map_err(api_to_uc)
+    }
+
+    async fn is_commit_reachable_from_project(
+        &self,
+        project: &Project,
+        commit_oid: &CommitOid,
+    ) -> Result<bool, UseCaseError> {
+        HttpInfraAdapter::is_commit_reachable_from_project(self, project, commit_oid)
+            .await
+            .map_err(api_to_uc)
+    }
+
+    async fn changed_paths_between(
+        &self,
+        project_id: ProjectId,
+        base_commit_oid: &CommitOid,
+        head_commit_oid: &CommitOid,
+    ) -> Result<Vec<String>, UseCaseError> {
+        HttpInfraAdapter::changed_paths_between(self, project_id, base_commit_oid, head_commit_oid)
+            .await
+            .map_err(api_to_uc)
+    }
+
+    async fn remove_workspace_path(
+        &self,
+        project_id: ProjectId,
+        workspace_path: &Path,
+    ) -> Result<(), UseCaseError> {
+        HttpInfraAdapter::remove_workspace_path(self, project_id, workspace_path)
+            .await
+            .map_err(api_to_uc)
+    }
+}
+
 impl WorkspaceInfraPort for HttpInfraAdapter {
     async fn reset_worktree(
         &self,
@@ -387,4 +452,8 @@ impl WorkspaceInfraPort for HttpInfraAdapter {
             .await
             .map_err(api_to_uc)
     }
+}
+
+fn api_to_uc(err: crate::error::ApiError) -> UseCaseError {
+    super::support::errors::api_to_usecase_error(err)
 }

@@ -8,11 +8,10 @@ use ingot_domain::ports::{
     CompletedJobCompletion, ConflictKind, JobCompletionContext, JobCompletionMutation,
     JobCompletionRepository, RepositoryError,
 };
-use sqlx::Row;
 use sqlx::{Sqlite, Transaction};
 
 use super::finding::upsert_finding;
-use super::helpers::{db_err, item_revision_is_stale, serialize_optional_json};
+use super::helpers::{db_err, item_revision_is_stale, row_get, serialize_optional_json};
 use crate::db::Database;
 
 impl Database {
@@ -248,12 +247,10 @@ async fn classify_job_completion_conflict(
         };
 
         let prepared_convergence_id: ingot_domain::ids::ConvergenceId =
-            prepared_convergence.try_get("id").map_err(db_err)?;
-        let prepared_target_ref: GitRef =
-            prepared_convergence.try_get("target_ref").map_err(db_err)?;
-        let input_target_commit_oid: Option<CommitOid> = prepared_convergence
-            .try_get("input_target_commit_oid")
-            .map_err(db_err)?;
+            row_get(&prepared_convergence, "id")?;
+        let prepared_target_ref: GitRef = row_get(&prepared_convergence, "target_ref")?;
+        let input_target_commit_oid: Option<CommitOid> =
+            row_get(&prepared_convergence, "input_target_commit_oid")?;
         if prepared_convergence_id != prepared_convergence_guard.convergence_id
             || prepared_target_ref != prepared_convergence_guard.target_ref
             || input_target_commit_oid.as_ref()

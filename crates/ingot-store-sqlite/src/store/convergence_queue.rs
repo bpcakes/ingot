@@ -2,10 +2,11 @@ use ingot_domain::convergence_queue::ConvergenceQueueEntry;
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{ConvergenceQueueEntryId, ItemId, ItemRevisionId, ProjectId};
 use ingot_domain::ports::{ConvergenceQueueRepository, RepositoryError};
-use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row};
+use super::helpers::{
+    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+};
 use crate::db::Database;
 
 impl Database {
@@ -252,15 +253,15 @@ impl ConvergenceQueueRepository for Database {
 
 fn map_convergence_queue_entry(row: &SqliteRow) -> Result<ConvergenceQueueEntry, RepositoryError> {
     Ok(ConvergenceQueueEntry {
-        id: row.try_get("id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        item_id: row.try_get("item_id").map_err(db_err)?,
-        item_revision_id: row.try_get("item_revision_id").map_err(db_err)?,
-        target_ref: row.try_get("target_ref").map_err(db_err)?,
-        status: row.try_get("status").map_err(db_err)?,
-        head_acquired_at: row.try_get("head_acquired_at").map_err(db_err)?,
-        created_at: row.try_get("created_at").map_err(db_err)?,
-        updated_at: row.try_get("updated_at").map_err(db_err)?,
-        released_at: row.try_get("released_at").map_err(db_err)?,
+        id: row_get(row, "id")?,
+        project_id: row_get(row, "project_id")?,
+        item_id: row_get(row, "item_id")?,
+        item_revision_id: row_get(row, "item_revision_id")?,
+        target_ref: row_get(row, "target_ref")?,
+        status: row_get(row, "status")?,
+        head_acquired_at: row_get(row, "head_acquired_at")?,
+        created_at: row_get(row, "created_at")?,
+        updated_at: row_get(row, "updated_at")?,
+        released_at: row_get(row, "released_at")?,
     })
 }

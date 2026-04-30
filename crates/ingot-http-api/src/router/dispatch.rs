@@ -1,25 +1,22 @@
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::post;
+use axum::{Json, Router};
+use ingot_domain::job::Job;
+use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_usecases::UseCaseError;
+use ingot_usecases::dispatch::{DispatchActivityContext, prepare_and_persist_dispatched_job};
+use ingot_usecases::job::{DispatchJobCommand, dispatch_job, retry_job};
+
+use crate::error::ApiError;
+
+use super::app::AppState;
 use super::item_projection::{ItemRuntimeSnapshot, load_item_runtime_snapshot};
 use super::support::{
     errors::{repo_to_item, repo_to_project},
     path::ApiPath,
 };
 use super::types::*;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::routing::post;
-use axum::{Json, Router};
-use ingot_domain::ids::ItemId;
-use ingot_domain::job::Job;
-use ingot_domain::ports::ProjectMutationLockPort;
-use ingot_domain::project::Project;
-use ingot_usecases::UseCaseError;
-use ingot_usecases::dispatch::{DispatchActivityContext, prepare_and_persist_dispatched_job};
-use ingot_usecases::job::{DispatchJobCommand, dispatch_job, retry_job};
-use ingot_workflow::Evaluator;
-
-use crate::error::ApiError;
-
-use super::app::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -95,105 +92,6 @@ pub(super) async fn dispatch_item_job(
     let job = prepared.job;
 
     Ok((StatusCode::CREATED, Json(job)))
-}
-
-pub(super) async fn dispatch_projected_item_job_locked(
-    state: &AppState,
-    project: &Project,
-    item_id: ItemId,
-    dispatch_origin: &'static str,
-) -> Result<Option<Job>, ApiError> {
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    if item.project_id != project.id {
-        return Err(UseCaseError::ItemNotFound.into());
-    }
-
-    let ItemRuntimeSnapshot {
-        current_revision,
-        jobs,
-        findings,
-        convergences,
-    } = load_item_runtime_snapshot(state, project.id, &item).await?;
-    let evaluation =
-        Evaluator::new().evaluate(&item, &current_revision, &jobs, &findings, &convergences);
-    let Some(step_id) = evaluation.dispatchable_step_id else {
-        return Ok(None);
-    };
-
-    let job = dispatch_job(
-        &item,
-        &current_revision,
-        &jobs,
-        &findings,
-        &convergences,
-        DispatchJobCommand {
-            step_id: Some(step_id),
-        },
-    )?;
-
-    let infra = state.infra();
-    let prepared = prepare_and_persist_dispatched_job(
-        &state.db,
-        &state.db,
-        &state.db,
-        &state.db,
-        &infra,
-        project,
-        &item,
-        &current_revision,
-        &jobs,
-        job,
-        DispatchActivityContext {
-            dispatch_origin: Some(dispatch_origin),
-            supersedes_job_id: None,
-            retry_no: None,
-        },
-    )
-    .await?;
-    let job = prepared.job;
-
-    Ok(Some(job))
-}
-
-pub(super) async fn auto_dispatch_projected_review_job(
-    state: &AppState,
-    project: &Project,
-    item_id: ItemId,
-) -> Result<Option<Job>, ApiError> {
-    let _guard = state
-        .project_locks
-        .acquire_project_mutation(project.id)
-        .await;
-    auto_dispatch_projected_review_job_locked(state, project, item_id).await
-}
-
-pub(super) async fn auto_dispatch_projected_review_job_locked(
-    state: &AppState,
-    project: &Project,
-    item_id: ItemId,
-) -> Result<Option<Job>, ApiError> {
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    let ItemRuntimeSnapshot {
-        current_revision,
-        jobs,
-        findings,
-        convergences,
-    } = load_item_runtime_snapshot(state, project.id, &item).await?;
-
-    let job = ingot_usecases::dispatch::auto_dispatch_review(
-        &state.db,
-        &state.db,
-        &state.db,
-        project,
-        &item,
-        &current_revision,
-        &jobs,
-        &findings,
-        &convergences,
-    )
-    .await?;
-
-    Ok(job)
 }
 
 pub(super) async fn retry_item_job(
