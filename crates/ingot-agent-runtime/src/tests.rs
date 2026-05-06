@@ -1,22 +1,13 @@
-use super::*;
-use crate::test_support::{
-    AutoQueuePauseHook, AutoQueuePausePoint, PreSpawnPauseHook, PreSpawnPausePoint,
-    ProjectedRecoveryPauseHook, ProjectedRecoveryPausePoint,
-};
-use ingot_agent_protocol::request::AgentRequest;
-use ingot_domain::commit_oid::CommitOid;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::execution::AgentRunOutcome;
-use crate::harness::PrepareHarnessValidationOutcome;
-use crate::supervisor::RunningJobMeta;
-use tokio::sync::Semaphore;
-use tokio::task::{Id as TaskId, JoinSet};
-
+use ingot_agent_protocol::request::AgentRequest;
 use ingot_domain::activity::ActivityEventType;
+use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::finding::{
     FindingSeverity, InvestigationFindingMetadata, InvestigationPromotion, InvestigationScope,
 };
@@ -38,17 +29,28 @@ use ingot_git::commands::head_oid;
 use ingot_test_support::git::{run_git as git_sync, temp_git_repo, unique_temp_path};
 use ingot_usecases::convergence::ConvergenceSystemActionPort;
 use ingot_usecases::job_lifecycle;
+use ingot_usecases::{UseCaseError, UseCaseInfraError};
 use sqlx::query;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use tokio::sync::Semaphore;
+use tokio::task::{Id as TaskId, JoinSet};
 
-mod runtime_crate {
-    pub use crate::{AgentRunner, DispatcherConfig, JobDispatcher};
-}
+use super::*;
+use crate::execution::AgentRunOutcome;
+use crate::harness::PrepareHarnessValidationOutcome;
+use crate::supervisor::RunningJobMeta;
+use crate::test_support::{
+    AutoQueuePauseHook, AutoQueuePausePoint, PreSpawnPauseHook, PreSpawnPausePoint,
+    ProjectedRecoveryPauseHook, ProjectedRecoveryPausePoint,
+};
+use shared_harness::{BlockingRunner, TestHarness as TestRuntimeHarness};
 
 #[path = "../tests/common/shared_harness.rs"]
 mod shared_harness;
 
-use shared_harness::{BlockingRunner, TestHarness as TestRuntimeHarness};
+mod runtime_crate {
+    pub use crate::{AgentRunner, DispatcherConfig, JobDispatcher};
+}
 
 #[test]
 fn commit_and_report_schemas_require_every_declared_property() {
@@ -150,6 +152,31 @@ async fn drain_until_idle_returns_first_error() {
     assert!(matches!(error, RuntimeError::InvalidState(message) if message == "boom"));
     assert_eq!(*calls.lock().expect("calls lock"), 2);
     assert!(script.lock().expect("script lock").is_empty());
+}
+
+#[test]
+fn usecase_to_runtime_preserves_non_repository_usecase_error() {
+    let error = crate::runtime_ports::usecase_to_runtime_error(UseCaseError::ProtocolViolation(
+        "bad protocol".into(),
+    ));
+
+    assert!(matches!(
+        error,
+        RuntimeError::UseCase(UseCaseError::ProtocolViolation(message))
+            if message == "bad protocol"
+    ));
+}
+
+#[test]
+fn runtime_git_error_maps_to_usecase_infrastructure_error() {
+    let error = crate::runtime_ports::usecase_from_runtime_error(RuntimeError::Git(
+        ingot_git::commands::GitCommandError::operation_failed("test", "git failed"),
+    ));
+
+    assert!(matches!(
+        error,
+        UseCaseError::Infrastructure(UseCaseInfraError::Git { .. })
+    ));
 }
 
 #[derive(Clone)]

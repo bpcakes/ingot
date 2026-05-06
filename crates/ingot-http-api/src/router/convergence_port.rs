@@ -1,7 +1,3 @@
-use super::item_projection::{
-    ItemRuntimeSnapshot, hydrate_convergence_validity, load_item_runtime_snapshot,
-};
-use super::support::errors::{api_to_usecase_error, repo_to_item, repo_to_project};
 use ingot_domain::activity::Activity;
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::convergence::Convergence;
@@ -26,6 +22,10 @@ use ingot_usecases::convergence::{
 use tracing::warn;
 
 use super::app::{AppState, teardown_revision_lane_state};
+use super::item_projection::{
+    ItemRuntimeSnapshot, hydrate_convergence_validity, load_item_runtime_snapshot,
+};
+use super::support::errors::{repo_to_item_usecase, repo_to_project_usecase};
 
 #[derive(Clone)]
 pub(super) struct HttpConvergencePort {
@@ -130,22 +130,18 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .db
                 .get_project(project_id)
                 .await
-                .map_err(repo_to_project)
-                .map_err(api_to_usecase_error)?;
+                .map_err(repo_to_project_usecase)?;
             let item = state
                 .db
                 .get_item(item_id)
                 .await
-                .map_err(repo_to_item)
-                .map_err(api_to_usecase_error)?;
+                .map_err(repo_to_item_usecase)?;
             let ItemRuntimeSnapshot {
                 current_revision,
                 jobs,
                 findings,
                 convergences,
-            } = load_item_runtime_snapshot(&state, project.id, &item)
-                .await
-                .map_err(api_to_usecase_error)?;
+            } = load_item_runtime_snapshot(&state, project.id, &item).await?;
             let active_queue_entry = state
                 .db
                 .find_active_queue_entry_for_revision(current_revision.id)
@@ -231,14 +227,12 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .db
                 .get_project(project_id)
                 .await
-                .map_err(repo_to_project)
-                .map_err(api_to_usecase_error)?;
+                .map_err(repo_to_project_usecase)?;
             let item = state
                 .db
                 .get_item(item_id)
                 .await
-                .map_err(repo_to_item)
-                .map_err(api_to_usecase_error)?;
+                .map_err(repo_to_item_usecase)?;
             ensure_item_in_project(&item, project_id)?;
             let revision = state
                 .db
@@ -259,8 +253,7 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                     .await
                     .map_err(UseCaseError::Repository)?,
             )
-            .await
-            .map_err(api_to_usecase_error)?;
+            .await?;
             let queue_entry = state
                 .db
                 .find_active_queue_entry_for_revision(revision.id)
@@ -272,8 +265,7 @@ impl ConvergenceCommandPort for HttpConvergencePort {
             let resolved_target_oid = state
                 .infra()
                 .resolve_project_ref_oid(project.id, &revision.target_ref)
-                .await
-                .map_err(api_to_usecase_error)?;
+                .await?;
 
             Ok(ingot_usecases::convergence::ConvergenceApprovalContext {
                 project,
@@ -319,8 +311,7 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .db
                 .get_item(item_id)
                 .await
-                .map_err(repo_to_item)
-                .map_err(api_to_usecase_error)?;
+                .map_err(repo_to_item_usecase)?;
             ensure_item_in_project(&item, project_id)?;
             let revision = state
                 .db
@@ -373,9 +364,8 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .get_revision(item.current_revision_id)
                 .await
                 .map_err(UseCaseError::Repository)?;
-            let teardown = teardown_revision_lane_state(&state, &project, item.id, &revision)
-                .await
-                .map_err(api_to_usecase_error)?;
+            let teardown =
+                teardown_revision_lane_state(&state, &project, item.id, &revision).await?;
             Ok(ingot_usecases::convergence::RejectApprovalTeardown {
                 has_cancelled_convergence: teardown.has_cancelled_convergence(),
                 has_cancelled_queue_entry: teardown.has_cancelled_queue_entry(),
@@ -447,8 +437,7 @@ impl PreparedConvergenceFinalizePort for HttpConvergencePort {
                     prepared_commit_oid,
                     input_target_commit_oid,
                 )
-                .await
-                .map_err(api_to_usecase_error)?
+                .await?
             {
                 FinalizeTargetRefOutcome::AlreadyFinalized => {
                     Ok(FinalizeTargetRefResult::AlreadyFinalized)
@@ -475,8 +464,7 @@ impl PreparedConvergenceFinalizePort for HttpConvergencePort {
             match state
                 .infra()
                 .checkout_finalization_status(&project, &revision.target_ref, &prepared_commit_oid)
-                .await
-                .map_err(api_to_usecase_error)?
+                .await?
             {
                 CheckoutFinalizationStatus::Blocked { message, .. } => {
                     Ok(CheckoutFinalizationReadiness::Blocked { message })
@@ -507,8 +495,7 @@ impl PreparedConvergenceFinalizePort for HttpConvergencePort {
                     &revision.target_ref,
                     &prepared_commit_oid,
                 )
-                .await
-                .map_err(api_to_usecase_error)?;
+                .await?;
             Ok(())
         }
     }
@@ -633,7 +620,6 @@ impl ConvergenceSystemActionPort for HttpConvergencePort {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::PathBuf;
 
     use chrono::Utc;
@@ -645,6 +631,7 @@ mod tests {
     };
     use ingot_usecases::convergence::ConvergenceCommandPort;
 
+    use super::*;
     use crate::router::test_helpers::test_app_state;
 
     fn temp_git_repo() -> PathBuf {

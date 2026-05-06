@@ -18,6 +18,8 @@ use ingot_usecases::convergence::{
     PreparedConvergenceFinalizePort, SystemActionItemState, SystemActionProjectState,
 };
 use ingot_usecases::reconciliation::ReconciliationPort;
+use ingot_usecases::{UseCaseError, UseCaseInfraError};
+use ingot_workspace::WorkspaceError;
 use ingot_workspace::remove_workspace;
 use tracing::warn;
 
@@ -36,29 +38,6 @@ pub(crate) struct RuntimeFinalizePort {
 #[derive(Clone)]
 pub(crate) struct RuntimeReconciliationPort {
     pub(crate) dispatcher: JobDispatcher,
-}
-
-pub(crate) fn usecase_to_runtime_error(error: ingot_usecases::UseCaseError) -> RuntimeError {
-    match error {
-        ingot_usecases::UseCaseError::Repository(error) => RuntimeError::Repository(error),
-        other => RuntimeError::InvalidState(other.to_string()),
-    }
-}
-
-pub(crate) fn usecase_from_runtime_error(error: RuntimeError) -> ingot_usecases::UseCaseError {
-    match error {
-        RuntimeError::Repository(error) => ingot_usecases::UseCaseError::Repository(error),
-        other => ingot_usecases::UseCaseError::Internal(other.to_string()),
-    }
-}
-
-pub(crate) async fn drain_until_idle<F, Fut>(mut step: F) -> Result<(), RuntimeError>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<bool, RuntimeError>>,
-{
-    while step().await? {}
-    Ok(())
 }
 
 impl ConvergenceSystemActionPort for RuntimeConvergencePort {
@@ -476,4 +455,46 @@ impl ReconciliationPort for RuntimeReconciliationPort {
                 .map_err(usecase_from_runtime_error)
         }
     }
+}
+
+pub(crate) fn usecase_to_runtime_error(error: UseCaseError) -> RuntimeError {
+    match error {
+        UseCaseError::Repository(error) => RuntimeError::Repository(error),
+        other => RuntimeError::UseCase(other),
+    }
+}
+
+pub(crate) fn usecase_from_runtime_error(error: RuntimeError) -> UseCaseError {
+    match error {
+        RuntimeError::UseCase(error) => error,
+        RuntimeError::Repository(error) => UseCaseError::Repository(error),
+        RuntimeError::Git(error) => UseCaseInfraError::git(error).into(),
+        RuntimeError::Workspace(error) => workspace_to_usecase_error(error),
+        RuntimeError::Io(error) => UseCaseInfraError::io(error).into(),
+        RuntimeError::Json(error) => UseCaseInfraError::serialization(error).into(),
+        RuntimeError::InvalidState(message) => UseCaseError::Internal(message),
+    }
+}
+
+fn workspace_to_usecase_error(error: WorkspaceError) -> UseCaseError {
+    match error {
+        error @ WorkspaceError::Busy => UseCaseInfraError::workspace_busy(error).into(),
+        error @ WorkspaceError::MissingInputHeadCommitOid => {
+            UseCaseInfraError::workspace_invalid_state(error).into()
+        }
+        error @ (WorkspaceError::WorkspaceRefMismatch { .. }
+        | WorkspaceError::WorkspaceHeadMismatch { .. }) => {
+            UseCaseInfraError::workspace_state_mismatch(error).into()
+        }
+        other => UseCaseInfraError::external("workspace", other).into(),
+    }
+}
+
+pub(crate) async fn drain_until_idle<F, Fut>(mut step: F) -> Result<(), RuntimeError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool, RuntimeError>>,
+{
+    while step().await? {}
+    Ok(())
 }

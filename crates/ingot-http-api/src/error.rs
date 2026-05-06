@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use ingot_usecases::UseCaseError;
+use ingot_usecases::{UseCaseError, UseCaseInfraError};
 use serde_json::json;
 
 #[derive(Debug)]
@@ -184,6 +184,7 @@ impl IntoResponse for ApiError {
                     "internal_error",
                     "Internal error".into(),
                 ),
+                UseCaseError::Infrastructure(error) => infrastructure_error_response(error),
                 UseCaseError::Internal(message) => {
                     (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
                 }
@@ -212,8 +213,78 @@ impl IntoResponse for ApiError {
     }
 }
 
+fn infrastructure_error_response(error: UseCaseInfraError) -> (StatusCode, &'static str, String) {
+    match error {
+        UseCaseInfraError::WorkspaceBusy { source } => {
+            (StatusCode::CONFLICT, "workspace_busy", source.to_string())
+        }
+        UseCaseInfraError::WorkspaceStateMismatch { source } => (
+            StatusCode::CONFLICT,
+            "workspace_state_mismatch",
+            source.to_string(),
+        ),
+        UseCaseInfraError::Git { .. } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "git_operation_failed",
+            "Git operation failed".into(),
+        ),
+        UseCaseInfraError::WorkspaceInvalidState { .. }
+        | UseCaseInfraError::Io { .. }
+        | UseCaseInfraError::Serialization { .. }
+        | UseCaseInfraError::External { .. } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Internal error".into(),
+        ),
+    }
+}
+
 impl From<UseCaseError> for ApiError {
     fn from(error: UseCaseError) -> Self {
         Self::UseCase(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+    use serde_json::Value;
+
+    use super::*;
+
+    async fn response_error_json(error: ApiError) -> (StatusCode, Value) {
+        let response = error.into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let json = serde_json::from_slice(&body).expect("json body");
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn git_infrastructure_errors_are_redacted_http_500() {
+        let (status, json) = response_error_json(ApiError::from(UseCaseError::Infrastructure(
+            UseCaseInfraError::git(ingot_git::commands::GitCommandError::operation_failed(
+                "test",
+                "sensitive stderr",
+            )),
+        )))
+        .await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json["error"]["code"], "git_operation_failed");
+        assert_eq!(json["error"]["message"], "Git operation failed");
+    }
+
+    #[tokio::test]
+    async fn workspace_busy_errors_map_to_http_409() {
+        let (status, json) = response_error_json(ApiError::from(UseCaseError::Infrastructure(
+            UseCaseInfraError::workspace_busy(ingot_workspace::WorkspaceError::Busy),
+        )))
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json["error"]["code"], "workspace_busy");
     }
 }

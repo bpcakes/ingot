@@ -7,7 +7,7 @@ use tokio::process::Command;
 
 use crate::commands::{GitCommandError, git, head_oid};
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct JobCommitTrailers {
     pub operation_id: GitOperationId,
     pub item_id: ItemId,
@@ -15,7 +15,7 @@ pub struct JobCommitTrailers {
     pub job_id: JobId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ConvergenceCommitTrailers {
     pub operation_id: GitOperationId,
     pub item_id: ItemId,
@@ -81,14 +81,11 @@ pub async fn create_daemon_commit_from_staged(
     let output = child.wait_with_output().await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = if stderr.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            stderr.trim().to_string()
-        };
-        return Err(GitCommandError::CommandFailed(message));
+        return Err(GitCommandError::command_failed(
+            repo_path,
+            &["commit", "--no-verify", "-F", "-"],
+            output,
+        ));
     }
 
     head_oid(repo_path).await

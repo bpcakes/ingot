@@ -7,26 +7,22 @@ use ingot_domain::workspace::{Workspace, WorkspaceStatus};
 use ingot_git::commands::{
     GitCommandError, check_ref_format, current_branch_name, resolve_ref_oid,
 };
-use ingot_usecases::{CompleteJobError, UseCaseError};
+use ingot_usecases::{CompleteJobError, UseCaseError, UseCaseInfraError};
 use ingot_workspace::WorkspaceError;
 
 use crate::error::ApiError;
 
-pub(crate) fn workspace_to_api_error(error: WorkspaceError) -> ApiError {
+pub(crate) fn workspace_to_usecase_error(error: WorkspaceError) -> UseCaseError {
     match error {
-        WorkspaceError::Busy => ApiError::Conflict {
-            code: "workspace_busy",
-            message: error.to_string(),
-        },
-        WorkspaceError::MissingInputHeadCommitOid => {
-            ApiError::from(UseCaseError::Internal(error.to_string()))
+        error @ WorkspaceError::Busy => UseCaseInfraError::workspace_busy(error).into(),
+        error @ WorkspaceError::MissingInputHeadCommitOid => {
+            UseCaseInfraError::workspace_invalid_state(error).into()
         }
-        WorkspaceError::WorkspaceRefMismatch { .. }
-        | WorkspaceError::WorkspaceHeadMismatch { .. } => ApiError::Conflict {
-            code: "workspace_state_mismatch",
-            message: error.to_string(),
-        },
-        other => ApiError::from(UseCaseError::Internal(other.to_string())),
+        error @ (WorkspaceError::WorkspaceRefMismatch { .. }
+        | WorkspaceError::WorkspaceHeadMismatch { .. }) => {
+            UseCaseInfraError::workspace_state_mismatch(error).into()
+        }
+        other => UseCaseInfraError::external("workspace", other).into(),
     }
 }
 
@@ -45,18 +41,11 @@ pub(crate) fn repo_to_internal(error: RepositoryError) -> ApiError {
 }
 
 pub(crate) fn git_to_internal(error: GitCommandError) -> ApiError {
-    ApiError::from(UseCaseError::Internal(error.to_string()))
+    ApiError::from(git_to_usecase_error(error))
 }
 
-pub(crate) fn api_to_usecase_error(error: ApiError) -> UseCaseError {
-    match error {
-        ApiError::UseCase(error) => error,
-        ApiError::BadRequest { message, .. }
-        | ApiError::Conflict { message, .. }
-        | ApiError::NotFound { message, .. }
-        | ApiError::Validation { message }
-        | ApiError::Internal { message } => UseCaseError::Internal(message),
-    }
+pub(crate) fn git_to_usecase_error(error: GitCommandError) -> UseCaseError {
+    UseCaseInfraError::git(error).into()
 }
 
 pub(crate) fn repo_to_job_completion(error: RepositoryError) -> ApiError {
@@ -86,10 +75,24 @@ pub(crate) fn repo_to_item(error: RepositoryError) -> ApiError {
     }
 }
 
+pub(crate) fn repo_to_item_usecase(error: RepositoryError) -> UseCaseError {
+    match error {
+        RepositoryError::NotFound => UseCaseError::ItemNotFound,
+        other => UseCaseError::Repository(other),
+    }
+}
+
 pub(crate) fn repo_to_project(error: RepositoryError) -> ApiError {
     match error {
         RepositoryError::NotFound => UseCaseError::ProjectNotFound.into(),
         other => ApiError::from(UseCaseError::Repository(other)),
+    }
+}
+
+pub(crate) fn repo_to_project_usecase(error: RepositoryError) -> UseCaseError {
+    match error {
+        RepositoryError::NotFound => UseCaseError::ProjectNotFound,
+        other => UseCaseError::Repository(other),
     }
 }
 
@@ -174,6 +177,18 @@ pub(crate) async fn ensure_git_valid_target_ref(target_ref: &str) -> Result<(), 
     {
         true => Ok(()),
         false => Err(UseCaseError::InvalidTargetRef(target_ref.into()).into()),
+    }
+}
+
+pub(crate) async fn ensure_git_valid_target_ref_usecase(
+    target_ref: &str,
+) -> Result<(), UseCaseError> {
+    match check_ref_format(target_ref)
+        .await
+        .map_err(git_to_usecase_error)?
+    {
+        true => Ok(()),
+        false => Err(UseCaseError::InvalidTargetRef(target_ref.into())),
     }
 }
 

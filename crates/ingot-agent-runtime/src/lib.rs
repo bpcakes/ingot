@@ -1,22 +1,3 @@
-mod autopilot;
-mod bootstrap;
-mod completion;
-mod convergence;
-mod dispatch;
-mod execution;
-mod harness;
-mod job_support;
-mod preparation;
-pub(crate) mod reconciliation;
-mod runtime_ports;
-mod supervisor;
-#[cfg(test)]
-mod test_support;
-
-use execution::run_prepared_agent_job;
-use harness::{HarnessPromptContext, resolve_harness_prompt_context};
-use supervisor::RunningJobResult;
-
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,6 +6,8 @@ use std::time::Duration;
 use chrono::{Duration as ChronoDuration, Utc};
 use ingot_agent_protocol::adapter::AgentError;
 use ingot_agent_protocol::request::AgentRequest;
+// Re-export report contract from protocol crate for internal use.
+pub(crate) use ingot_agent_protocol::report;
 use ingot_agent_protocol::response::{AgentOutputChunk, AgentResponse};
 use ingot_config::paths::job_logs_dir;
 use ingot_domain::activity::{Activity, ActivityEventType, ActivitySubject};
@@ -44,6 +27,8 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 pub(crate) use completion::{ReportCompletion, ReportCompletionError};
+use execution::run_prepared_agent_job;
+use harness::{HarnessPromptContext, resolve_harness_prompt_context};
 pub(crate) use job_support::{
     PrepareRunOutcome, PreparedRun, WorkspaceLifecycle, built_in_template, commit_subject,
     failure_escalation_reason, format_revision_context,
@@ -54,8 +39,25 @@ pub(crate) use runtime_ports::{
     RuntimeConvergencePort, RuntimeFinalizePort, RuntimeReconciliationPort, drain_until_idle,
     usecase_from_runtime_error, usecase_to_runtime_error,
 };
+use supervisor::RunningJobResult;
 
-#[derive(Debug, Clone)]
+mod autopilot;
+mod bootstrap;
+mod completion;
+mod convergence;
+mod dispatch;
+mod execution;
+mod harness;
+mod job_support;
+mod preparation;
+pub(crate) mod reconciliation;
+mod runtime_ports;
+mod supervisor;
+
+type AgentLaunchFuture<'a> =
+    Pin<Box<dyn std::future::Future<Output = Result<AgentResponse, AgentError>> + Send + 'a>>;
+
+#[derive(Clone, Debug)]
 pub struct DispatcherConfig {
     pub state_root: PathBuf,
     pub poll_interval: Duration,
@@ -78,9 +80,6 @@ impl DispatcherConfig {
     }
 }
 
-type AgentLaunchFuture<'a> =
-    Pin<Box<dyn std::future::Future<Output = Result<AgentResponse, AgentError>> + Send + 'a>>;
-
 pub trait AgentRunner: Send + Sync {
     fn launch<'a>(
         &'a self,
@@ -100,7 +99,7 @@ pub trait AgentRunner: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CliAgentRunner;
 
 impl AgentRunner for CliAgentRunner {
@@ -134,21 +133,10 @@ impl AgentRunner for CliAgentRunner {
     }
 }
 
-#[derive(Clone)]
-pub struct JobDispatcher {
-    db: Database,
-    project_locks: ProjectLocks,
-    config: DispatcherConfig,
-    lease_owner_id: LeaseOwnerId,
-    runner: Arc<dyn AgentRunner>,
-    dispatch_notify: DispatchNotify,
-    ui_events: UiEventBus,
-    #[cfg(test)]
-    test_hooks: test_support::DispatcherTestHooks,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error("usecase error: {0}")]
+    UseCase(#[from] ingot_usecases::UseCaseError),
     #[error("repository error: {0}")]
     Repository(#[from] RepositoryError),
     #[error("git error: {0}")]
@@ -161,6 +149,19 @@ pub enum RuntimeError {
     Json(#[from] serde_json::Error),
     #[error("invalid runtime state: {0}")]
     InvalidState(String),
+}
+
+#[derive(Clone)]
+pub struct JobDispatcher {
+    db: Database,
+    project_locks: ProjectLocks,
+    config: DispatcherConfig,
+    lease_owner_id: LeaseOwnerId,
+    runner: Arc<dyn AgentRunner>,
+    dispatch_notify: DispatchNotify,
+    ui_events: UiEventBus,
+    #[cfg(test)]
+    test_hooks: test_support::DispatcherTestHooks,
 }
 
 impl JobDispatcher {
@@ -367,8 +368,8 @@ impl JobDispatcher {
     }
 }
 
-// Re-export report contract from protocol crate for internal use.
-pub(crate) use ingot_agent_protocol::report;
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests;

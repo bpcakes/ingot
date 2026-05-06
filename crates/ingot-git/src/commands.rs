@@ -1,24 +1,93 @@
+use std::fmt;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::git_ref::GitRef;
 use tokio::process::Command;
 
+#[derive(Debug)]
+pub struct GitCommandFailure {
+    pub cwd: PathBuf,
+    pub args: Vec<String>,
+    pub exit_status: String,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl fmt::Display for GitCommandFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "git command failed in {}: git {:?} exited with {}: {}",
+            self.cwd.display(),
+            self.args,
+            self.exit_status,
+            command_output_message(&self.stdout, &self.stderr)
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GitCommandError {
-    #[error("git command failed: {0}")]
-    CommandFailed(String),
+    #[error("{0}")]
+    CommandFailed(Box<GitCommandFailure>),
+    #[error("git operation failed during {operation}: {message}")]
+    OperationFailed {
+        operation: &'static str,
+        message: String,
+    },
+    #[error("invalid mirror path: {path}")]
+    InvalidMirrorPath { path: PathBuf },
+    #[error("checkout sync blocked ({code}): {message}")]
+    CheckoutSyncBlocked { code: String, message: String },
+    #[error("fetched {target_ref} as {actual:?}, expected {expected}")]
+    UnexpectedFetchedOid {
+        target_ref: GitRef,
+        expected: CommitOid,
+        actual: Option<CommitOid>,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl GitCommandError {
+    #[must_use]
+    pub fn command_failed(repo_path: &Path, args: &[&str], output: Output) -> Self {
+        Self::CommandFailed(Box::new(GitCommandFailure {
+            cwd: repo_path.to_path_buf(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            exit_status: output.status.to_string(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }))
+    }
+
+    #[must_use]
+    pub fn operation_failed(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::OperationFailed {
+            operation,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FinalizeTargetRefOutcome {
     AlreadyFinalized,
     UpdatedNow,
     Stale,
+}
+
+fn command_output_message<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
+    if !stderr.trim().is_empty() {
+        return stderr;
+    }
+
+    stdout.trim()
 }
 
 /// Run a git command in the given working directory.
@@ -30,8 +99,7 @@ pub async fn git(repo_path: &Path, args: &[&str]) -> Result<Output, GitCommandEr
         .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitCommandError::CommandFailed(stderr.to_string()));
+        return Err(GitCommandError::command_failed(repo_path, args, output));
     }
 
     Ok(output)
@@ -53,13 +121,14 @@ pub async fn current_branch_name(repo_path: &Path) -> Result<String, GitCommandE
 
 /// Get the symbolic ref for HEAD, or None when detached.
 pub async fn current_head_ref(repo_path: &Path) -> Result<Option<GitRef>, GitCommandError> {
+    let args = ["symbolic-ref", "--quiet", "HEAD"];
     let output = Command::new("git")
-        .args(["symbolic-ref", "--quiet", "HEAD"])
+        .args(args)
         .current_dir(repo_path)
         .output()
         .await?;
 
-    decode_optional_verify(output).map(|resolved| resolved.map(GitRef::new))
+    decode_optional_verify(repo_path, &args, output).map(|resolved| resolved.map(GitRef::new))
 }
 
 /// Get the OID a ref points to.
@@ -89,20 +158,20 @@ pub async fn is_commit_reachable_from_any_ref(
         return Ok(false);
     }
 
+    let args = [
+        "for-each-ref",
+        "--contains",
+        commit_oid.as_str(),
+        "--format=%(refname)",
+    ];
     let output = Command::new("git")
-        .args([
-            "for-each-ref",
-            "--contains",
-            commit_oid.as_str(),
-            "--format=%(refname)",
-        ])
+        .args(args)
         .current_dir(repo_path)
         .output()
         .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitCommandError::CommandFailed(stderr.to_string()));
+        return Err(GitCommandError::command_failed(repo_path, &args, output));
     }
 
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
@@ -123,16 +192,21 @@ async fn verify_revision(
     repo_path: &Path,
     revision: &str,
 ) -> Result<Option<String>, GitCommandError> {
+    let args = ["rev-parse", "--verify", "--quiet", revision];
     let output = Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", revision])
+        .args(args)
         .current_dir(repo_path)
         .output()
         .await?;
 
-    decode_optional_verify(output)
+    decode_optional_verify(repo_path, &args, output)
 }
 
-fn decode_optional_verify(output: Output) -> Result<Option<String>, GitCommandError> {
+fn decode_optional_verify(
+    repo_path: &Path,
+    args: &[&str],
+    output: Output,
+) -> Result<Option<String>, GitCommandError> {
     if output.status.success() {
         return Ok(Some(
             String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -144,7 +218,7 @@ fn decode_optional_verify(output: Output) -> Result<Option<String>, GitCommandEr
         return Ok(None);
     }
 
-    Err(GitCommandError::CommandFailed(stderr.to_string()))
+    Err(GitCommandError::command_failed(repo_path, args, output))
 }
 
 pub async fn compare_and_swap_ref(
@@ -248,12 +322,13 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use ingot_domain::git_ref::GitRef;
+    use ingot_test_support::git::{git_output, run_git as git_sync, temp_git_repo};
+
     use super::{
         CommitOid, FinalizeTargetRefOutcome, GitCommandError, check_ref_format,
         finalize_target_ref, finalize_target_ref_with, resolve_ref_oid,
     };
-    use ingot_domain::git_ref::GitRef;
-    use ingot_test_support::git::{git_output, run_git as git_sync, temp_git_repo};
 
     #[tokio::test]
     async fn check_ref_format_accepts_valid_head_refs() {
@@ -403,7 +478,12 @@ mod tests {
                     })
                 }
             },
-            || async { Err(GitCommandError::CommandFailed("stale old oid".into())) },
+            || async {
+                Err(GitCommandError::operation_failed(
+                    "test compare-and-swap",
+                    "stale old oid",
+                ))
+            },
             &CommitOid::new("prepared"),
             &CommitOid::new("base"),
         )
@@ -418,7 +498,12 @@ mod tests {
     async fn finalize_target_ref_preserves_cas_error_when_ref_is_still_at_expected_old_oid() {
         let outcome = finalize_target_ref_with(
             || async { Ok(Some(CommitOid::new("base"))) },
-            || async { Err(GitCommandError::CommandFailed("update-ref failed".into())) },
+            || async {
+                Err(GitCommandError::operation_failed(
+                    "test compare-and-swap",
+                    "update-ref failed",
+                ))
+            },
             &CommitOid::new("prepared"),
             &CommitOid::new("base"),
         )
@@ -426,7 +511,29 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            Err(GitCommandError::CommandFailed(message)) if message == "update-ref failed"
+            Err(GitCommandError::OperationFailed { operation, message })
+                if operation == "test compare-and-swap" && message == "update-ref failed"
         ));
+    }
+
+    #[tokio::test]
+    async fn git_command_failure_preserves_process_context() {
+        let repo = temp_git_repo("ingot-git-command-error");
+        let outcome = super::git(&repo, &["rev-parse", "--verify", "missing-ref"]).await;
+
+        assert!(matches!(
+            outcome,
+            Err(GitCommandError::CommandFailed(failure)) if failure.cwd == repo
+                && failure.args == vec!["rev-parse", "--verify", "missing-ref"]
+                && failure.exit_code.is_some()
+        ));
+    }
+
+    #[test]
+    fn command_output_message_uses_stdout_when_stderr_is_empty() {
+        assert_eq!(
+            super::command_output_message("stdout detail\n", "\n"),
+            "stdout detail"
+        );
     }
 }

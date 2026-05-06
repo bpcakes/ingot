@@ -11,24 +11,32 @@ use tokio::process::Command;
 
 use crate::commands::{GitCommandError, current_head_ref, git, head_oid, resolve_ref_oid};
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ProjectRepoPaths {
     pub checkout_path: PathBuf,
     pub mirror_git_dir: PathBuf,
     pub worktree_root: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CheckoutSyncStatus {
     Ready,
     Blocked { code: &'static str, message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CheckoutFinalizationStatus {
     Synced,
     NeedsSync,
     Blocked { code: &'static str, message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RefreshMirrorError {
+    #[error(transparent)]
+    Repository(RepositoryError),
+    #[error(transparent)]
+    Git(GitCommandError),
 }
 
 async fn tracked_working_tree_has_changes(repo_path: &Path) -> Result<bool, GitCommandError> {
@@ -174,7 +182,9 @@ pub async fn ensure_mirror(paths: &ProjectRepoPaths) -> Result<(), GitCommandErr
             .mirror_git_dir
             .file_name()
             .and_then(|value| value.to_str())
-            .ok_or_else(|| GitCommandError::CommandFailed("invalid mirror path".into()))?
+            .ok_or_else(|| GitCommandError::InvalidMirrorPath {
+                path: paths.mirror_git_dir.clone(),
+            })?
             .to_string();
         git_clone_mirror(mirror_parent, &checkout, &mirror_name).await?;
         return Ok(());
@@ -212,14 +222,6 @@ pub async fn ensure_mirror(paths: &ProjectRepoPaths) -> Result<(), GitCommandErr
         .await?;
     }
     Ok(())
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RefreshMirrorError {
-    #[error(transparent)]
-    Repository(RepositoryError),
-    #[error(transparent)]
-    Git(GitCommandError),
 }
 
 /// Refresh the project mirror, skipping the fetch when an unresolved
@@ -350,11 +352,14 @@ pub async fn sync_checkout_to_commit(
     target_ref: &GitRef,
     commit_oid: &CommitOid,
 ) -> Result<(), GitCommandError> {
-    if let CheckoutSyncStatus::Blocked { message, .. } =
+    if let CheckoutSyncStatus::Blocked { code, message } =
         checkout_sync_status_for_commit(checkout_path, mirror_git_dir, target_ref, commit_oid)
             .await?
     {
-        return Err(GitCommandError::CommandFailed(message));
+        return Err(GitCommandError::CheckoutSyncBlocked {
+            code: code.to_string(),
+            message,
+        });
     }
 
     let sync_ref = format!(
@@ -380,12 +385,11 @@ pub async fn sync_checkout_to_commit(
     let fetched_oid = resolve_ref_oid(checkout_path, &sync_ref).await?;
     if !fetched_oid.as_ref().is_some_and(|oid| oid == commit_oid) {
         let _ = crate::commands::delete_ref(checkout_path, &sync_ref).await;
-        return Err(GitCommandError::CommandFailed(format!(
-            "fetched {target_ref} as {}, expected {commit_oid}",
-            fetched_oid
-                .map(|oid| oid.into_inner())
-                .unwrap_or_else(|| "missing".into())
-        )));
+        return Err(GitCommandError::UnexpectedFetchedOid {
+            target_ref: target_ref.clone(),
+            expected: commit_oid.clone(),
+            actual: fetched_oid,
+        });
     }
     let reset_result = git(checkout_path, &["reset", "--hard", commit_oid.as_str()]).await;
     let _ = crate::commands::delete_ref(checkout_path, &sync_ref).await;
@@ -405,8 +409,11 @@ async fn git_clone_mirror(
         .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitCommandError::CommandFailed(stderr.to_string()));
+        return Err(GitCommandError::command_failed(
+            workdir,
+            &["clone", "--mirror", checkout_path, mirror_name],
+            output,
+        ));
     }
 
     Ok(())
@@ -414,17 +421,19 @@ async fn git_clone_mirror(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CheckoutFinalizationStatus, ensure_mirror, project_repo_paths, sync_checkout_to_commit,
-    };
-    use crate::commands::{current_head_ref, resolve_ref_oid};
+    use std::fs;
+
     use ingot_domain::commit_oid::CommitOid;
     use ingot_domain::git_ref::GitRef;
     use ingot_domain::ids::ProjectId;
     use ingot_test_support::git::{
         git_output, run_git as git_sync, temp_git_repo, unique_temp_path,
     };
-    use std::fs;
+
+    use super::{
+        CheckoutFinalizationStatus, ensure_mirror, project_repo_paths, sync_checkout_to_commit,
+    };
+    use crate::commands::{current_head_ref, resolve_ref_oid};
 
     #[tokio::test]
     async fn ensure_mirror_preserves_daemon_refs_while_pruning_checkout_refs() {

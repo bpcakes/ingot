@@ -14,14 +14,13 @@ use ingot_domain::revision::ItemRevision;
 use ingot_git::GitJobCompletionPort;
 use ingot_git::project_repo::project_repo_paths_for_project;
 use ingot_store_sqlite::Database;
-use ingot_usecases::{CompleteJobService, DispatchNotify, ProjectLocks, UiEventBus};
-
-use crate::error::ApiError;
+use ingot_usecases::application::refresh_revision_context_for_item;
+use ingot_usecases::{CompleteJobService, DispatchNotify, ProjectLocks, UiEventBus, UseCaseError};
 
 use super::infra_ports::HttpInfraAdapter;
 use super::items::{self, RevisionLaneTeardown};
 use super::jobs;
-use super::support::errors::{repo_to_internal, repo_to_item};
+use super::support::errors::repo_to_item_usecase;
 use super::{agents, convergence, core, dispatch, findings, harness, projects, workspaces};
 
 pub(crate) type AppCompleteJobService =
@@ -171,23 +170,27 @@ pub(crate) async fn teardown_revision_lane_state(
     project: &Project,
     item_id: ItemId,
     revision: &ItemRevision,
-) -> Result<RevisionLaneTeardown, ApiError> {
+) -> Result<RevisionLaneTeardown, UseCaseError> {
     let uc_result = ingot_usecases::teardown::teardown_revision_lane(
         &state.db, &state.db, &state.db, &state.db, &state.db, &state.db, project.id, item_id,
         revision,
     )
     .await?;
 
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
-    jobs::refresh_revision_context_for_job_like(state, &item, revision).await?;
-
+    let item = state
+        .db
+        .get_item(item_id)
+        .await
+        .map_err(repo_to_item_usecase)?;
     let infra = state.infra();
+    refresh_revision_context_for_item(&state.db, &infra, &item, revision).await?;
+
     for workspace_id in &uc_result.integration_workspace_ids {
         let workspace = state
             .db
             .get_workspace(*workspace_id)
             .await
-            .map_err(repo_to_internal)?;
+            .map_err(UseCaseError::Repository)?;
         if workspace.path.exists() {
             let _ = infra
                 .remove_workspace_path(project.id, &workspace.path)

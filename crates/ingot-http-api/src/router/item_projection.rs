@@ -1,5 +1,3 @@
-use super::support::errors::{repo_to_internal, repo_to_item, repo_to_project};
-use super::types::*;
 use ingot_domain::convergence::{CheckoutAdoptionState, Convergence, ConvergenceStatus};
 use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
 use ingot_domain::finding::Finding;
@@ -10,14 +8,15 @@ use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_usecases::UseCaseError;
 use ingot_usecases::finding::parse_revision_context_summary;
-use ingot_workflow::BoardStatus;
 use ingot_workflow::{
-    AllowedAction, Evaluation, Evaluator, NamedRecommendedAction, PhaseStatus, RecommendedAction,
+    AllowedAction, BoardStatus, Evaluation, Evaluator, NamedRecommendedAction, PhaseStatus,
+    RecommendedAction,
 };
 
-use crate::error::ApiError;
-
 use super::app::AppState;
+use super::support::errors::{repo_to_internal, repo_to_item, repo_to_project};
+use super::types::*;
+use crate::error::ApiError;
 
 pub(super) struct ItemRuntimeSnapshot {
     pub current_revision: ItemRevision,
@@ -30,25 +29,25 @@ pub(super) async fn load_item_runtime_snapshot(
     state: &AppState,
     project_id: ProjectId,
     item: &Item,
-) -> Result<ItemRuntimeSnapshot, ApiError> {
+) -> Result<ItemRuntimeSnapshot, UseCaseError> {
     let db = &state.db;
 
     let current_revision = db
         .get_revision(item.current_revision_id)
         .await
-        .map_err(repo_to_internal)?;
+        .map_err(UseCaseError::Repository)?;
     let jobs = db
         .list_jobs_by_item(item.id)
         .await
-        .map_err(repo_to_internal)?;
+        .map_err(UseCaseError::Repository)?;
     let findings = db
         .list_findings_by_item(item.id)
         .await
-        .map_err(repo_to_internal)?;
+        .map_err(UseCaseError::Repository)?;
     let convergences = db
         .list_convergences_by_item(item.id)
         .await
-        .map_err(repo_to_internal)?;
+        .map_err(UseCaseError::Repository)?;
     let convergences = hydrate_convergence_validity(state, project_id, convergences).await?;
     Ok(ItemRuntimeSnapshot {
         current_revision,
@@ -325,7 +324,7 @@ pub(super) async fn hydrate_convergence_validity(
     state: &AppState,
     project_id: ProjectId,
     mut convergences: Vec<Convergence>,
-) -> Result<Vec<Convergence>, ApiError> {
+) -> Result<Vec<Convergence>, UseCaseError> {
     let infra = state.infra();
     for convergence in &mut convergences {
         convergence.target_head_valid = infra
