@@ -1,4 +1,4 @@
-.PHONY: all ci build check test lint fmt clean dev dev-ui dev-daemon help tla-check
+.PHONY: all ci build check test lint fmt clean dev dev-ui dev-daemon electron help tla-check
 
 TLA_TOOLS_JAR ?= tools/tla2tools.jar
 
@@ -58,6 +58,9 @@ dev-daemon: ## Run daemon in dev mode
 
 dev-ui: ## Run UI dev server
 	cd ui && bun run dev
+
+electron: ## Run Electron desktop app in dev mode
+	cd ui && bun run electron:dev
 
 # --- Combined ---
 

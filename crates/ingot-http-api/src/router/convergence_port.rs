@@ -16,8 +16,7 @@ use ingot_git::project_repo::CheckoutFinalizationStatus;
 use ingot_usecases::UseCaseError;
 use ingot_usecases::convergence::{
     ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceCommandPort,
-    ConvergenceQueuePrepareContext, ConvergenceSystemActionPort, FinalizeTargetRefResult,
-    PreparedConvergenceFinalizePort,
+    ConvergenceQueuePrepareContext, FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
 };
 use tracing::warn;
 
@@ -111,10 +110,6 @@ fn prepared_convergence_for_revision(
                 && convergence.state.status() == ConvergenceStatus::Prepared
         })
         .cloned()
-}
-
-fn unsupported_http_system_action<T>(message: &'static str) -> Result<T, UseCaseError> {
-    Err(UseCaseError::Internal(message.into()))
 }
 
 impl ConvergenceCommandPort for HttpConvergencePort {
@@ -568,53 +563,6 @@ impl PreparedConvergenceFinalizePort for HttpConvergencePort {
             }
             Ok(())
         }
-    }
-}
-
-impl ConvergenceSystemActionPort for HttpConvergencePort {
-    async fn load_system_action_projects(
-        &self,
-    ) -> Result<Vec<ingot_usecases::convergence::SystemActionProjectState>, UseCaseError> {
-        unsupported_http_system_action("http convergence port does not load system actions")
-    }
-
-    async fn promote_queue_heads(&self, _project_id: ProjectId) -> Result<(), UseCaseError> {
-        unsupported_http_system_action("http convergence port does not promote queue heads")
-    }
-
-    async fn prepare_queue_head_convergence(
-        &self,
-        _project: &Project,
-        _state: &ingot_usecases::convergence::SystemActionItemState,
-        _queue_entry: &ConvergenceQueueEntry,
-    ) -> Result<(), UseCaseError> {
-        unsupported_http_system_action("http convergence port does not prepare queue heads")
-    }
-
-    async fn invalidate_prepared_convergence(
-        &self,
-        _project_id: ProjectId,
-        _item_id: ItemId,
-    ) -> Result<(), UseCaseError> {
-        unsupported_http_system_action(
-            "http convergence port does not invalidate prepared convergence",
-        )
-    }
-
-    async fn auto_finalize_prepared_convergence(
-        &self,
-        _project_id: ProjectId,
-        _item_id: ItemId,
-    ) -> Result<bool, UseCaseError> {
-        unsupported_http_system_action("http convergence port does not auto-finalize convergence")
-    }
-
-    async fn auto_queue_convergence(
-        &self,
-        _project_id: ProjectId,
-        _item_id: ItemId,
-    ) -> Result<bool, UseCaseError> {
-        unsupported_http_system_action("http convergence port does not auto-queue convergence")
     }
 }
 

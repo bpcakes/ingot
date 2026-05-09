@@ -120,11 +120,16 @@ async fn create_demo_project_route_creates_implicit_initial_revisions_under_temp
     let items_created = json["items_created"].as_u64().expect("items_created") as usize;
 
     let project = db.get_project(project_id).await.expect("load project");
+    assert_eq!(project.name, "Finance Tracker Demo");
     let canonical_documents =
         std::fs::canonicalize(&home_documents).expect("canonicalize temp Documents");
     assert!(
         project.path.starts_with(&canonical_documents),
         "demo project should stay under the temp HOME Documents directory"
+    );
+    assert!(
+        project.path.ends_with("ingot-demo-finance-tracker-demo"),
+        "demo project path should use a normalized custom-name slug"
     );
     assert!(project.path.exists(), "demo repo should exist on disk");
 

@@ -6,6 +6,7 @@ Cargo.lock
 .DS_Store
 node_modules/
 ui/dist/
+ui/release/
 ~/.ingot/
 
 # Dolt database files (added by bd init)

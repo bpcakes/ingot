@@ -33,6 +33,8 @@ use crate::router::support::{
 
 use catalog::{DEMO_CATALOG, find_template};
 
+const DEFAULT_TEMPLATE_SLUG: &str = "mini-crm";
+
 #[derive(Debug, Deserialize)]
 pub struct CreateDemoProjectRequest {
     pub name: Option<String>,
@@ -100,6 +102,27 @@ fn init_demo_repo(project_dir: &std::path::Path, seed_readme: &str) -> Result<()
     Ok(())
 }
 
+fn normalize_demo_slug(input: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+
+    for c in input.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+            last_was_separator = false;
+        } else if !last_was_separator && !slug.is_empty() {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    if slug.is_empty() { None } else { Some(slug) }
+}
+
 pub async fn get_demo_catalog() -> Json<DemoCatalogResponse> {
     Json(DemoCatalogResponse {
         templates: DEMO_CATALOG
@@ -127,7 +150,7 @@ pub async fn create_demo_project(
     State(state): State<AppState>,
     Json(request): Json<CreateDemoProjectRequest>,
 ) -> Result<(StatusCode, Json<DemoProjectResponse>), ApiError> {
-    let template_slug = request.template.as_deref().unwrap_or("mini-crm");
+    let template_slug = request.template.as_deref().unwrap_or(DEFAULT_TEMPLATE_SLUG);
     let template = find_template(template_slug).ok_or(ApiError::BadRequest {
         code: "invalid_demo_template",
         message: format!("Unknown demo template: {template_slug}"),
@@ -141,18 +164,17 @@ pub async fn create_demo_project(
             message: format!("Unknown stack '{stack_slug}' for template '{template_slug}'"),
         })?;
 
-    let slug = request
+    let requested_name = request
         .name
         .as_deref()
-        .unwrap_or(template.slug)
-        .trim()
-        .to_lowercase()
-        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-");
-    let slug = if slug.is_empty() {
-        template.slug.to_string()
-    } else {
-        slug
-    };
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let project_name = requested_name
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Demo: {}", template.name));
+    let slug = requested_name
+        .and_then(normalize_demo_slug)
+        .unwrap_or_else(|| template.slug.to_string());
 
     let home = std::env::var("HOME").map(PathBuf::from).map_err(|_| {
         ApiError::from(UseCaseError::Internal(
@@ -188,7 +210,7 @@ pub async fn create_demo_project(
     let now = Utc::now();
     let project = Project {
         id: ProjectId::new(),
-        name: format!("Demo: {}", template.name),
+        name: project_name,
         path: path.clone(),
         default_branch,
         color: template.color.to_string(),
@@ -211,6 +233,10 @@ pub async fn create_demo_project(
     let target_ref = GitRef::parse_target_ref(project.default_branch.as_str())
         .map_err(target_ref_parse_to_api_error)?;
     ensure_git_valid_target_ref(target_ref.as_str()).await?;
+    let resolved_target_head = resolve_ref_oid(&project.path, &target_ref)
+        .await
+        .map_err(git_to_internal)?
+        .ok_or_else(|| UseCaseError::TargetRefUnresolved(target_ref.to_string()))?;
 
     let _guard = state
         .project_locks
@@ -222,10 +248,6 @@ pub async fn create_demo_project(
     for item_def in template.items.iter() {
         let sort_key = next_sort_key_after(previous_sort_key.as_deref());
         previous_sort_key = Some(sort_key.clone());
-        let resolved_target_head = resolve_ref_oid(&project.path, &target_ref)
-            .await
-            .map_err(git_to_internal)?
-            .ok_or_else(|| UseCaseError::TargetRefUnresolved(target_ref.to_string()))?;
 
         let (item, revision) = create_manual_item(
             &project,
@@ -272,4 +294,27 @@ pub async fn create_demo_project(
             items_created,
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_demo_slug;
+
+    #[test]
+    fn normalize_demo_slug_collapses_separators_and_trims_edges() {
+        assert_eq!(
+            normalize_demo_slug("  Finance Tracker: 2026!!  ").as_deref(),
+            Some("finance-tracker-2026")
+        );
+        assert_eq!(
+            normalize_demo_slug("--Mini__CRM--").as_deref(),
+            Some("mini-crm")
+        );
+    }
+
+    #[test]
+    fn normalize_demo_slug_rejects_blank_or_symbol_only_input() {
+        assert_eq!(normalize_demo_slug("   "), None);
+        assert_eq!(normalize_demo_slug("!!!"), None);
+    }
 }

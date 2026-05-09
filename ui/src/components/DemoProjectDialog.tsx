@@ -10,6 +10,7 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
+import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
@@ -26,12 +27,18 @@ export function DemoProjectDialog({ open, onOpenChange }: DemoProjectDialogProps
 
   const [selectedTemplate, setSelectedTemplate] = useState('mini-crm')
   const [selectedStack, setSelectedStack] = useState('express-react')
+  const [projectName, setProjectName] = useState('')
 
   const currentTemplate = templates.find((t) => t.slug === selectedTemplate)
   const stacks = currentTemplate?.stacks ?? []
 
   const mutation = useMutation({
-    mutationFn: () => createDemoProject({ template: selectedTemplate, stack: selectedStack }),
+    mutationFn: () =>
+      createDemoProject({
+        name: projectName.trim() || undefined,
+        template: selectedTemplate,
+        stack: selectedStack,
+      }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.projects() })
       handleOpenChange(false)
@@ -48,6 +55,7 @@ export function DemoProjectDialog({ open, onOpenChange }: DemoProjectDialogProps
     if (!next) {
       setSelectedTemplate('mini-crm')
       setSelectedStack('express-react')
+      setProjectName('')
       mutation.reset()
     }
   }
@@ -98,6 +106,16 @@ export function DemoProjectDialog({ open, onOpenChange }: DemoProjectDialogProps
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="demo-project-name">Project name</Label>
+          <Input
+            id="demo-project-name"
+            placeholder={currentTemplate ? `Demo: ${currentTemplate.name}` : 'Demo project'}
+            value={projectName}
+            onChange={(event) => setProjectName(event.target.value)}
+          />
         </div>
 
         <div className="flex items-center gap-3">

@@ -14,9 +14,7 @@ use ingot_domain::git_operation::{
 use ingot_domain::ids::{GitOperationId, JobId};
 use ingot_domain::job::{ExecutionPermission, Job, JobStatus, OutcomeClass, OutputArtifactKind};
 use ingot_domain::ports::FinishJobNonSuccessParams;
-use ingot_domain::ports::{
-    ConflictKind, JobCompletionMutation, ProjectMutationLockPort, RepositoryError,
-};
+use ingot_domain::ports::{ConflictKind, ProjectMutationLockPort, RepositoryError};
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::{Workspace, WorkspaceStatus};
@@ -24,7 +22,7 @@ use ingot_git::commands::{git, head_oid, resolve_ref_oid};
 use ingot_git::commit::{JobCommitTrailers, create_daemon_job_commit, working_tree_has_changes};
 use ingot_git::diff::changed_paths_between;
 use ingot_store_sqlite::ClaimQueuedAgentJobExecutionParams;
-use ingot_usecases::rebuild_revision_context;
+use ingot_usecases::{CompleteJobCommand, rebuild_revision_context};
 use ingot_workspace::remove_workspace;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
@@ -35,7 +33,7 @@ use tracing::{Instrument, debug, info, info_span, warn};
 use crate::{
     JobDispatcher, PreparedRun, ReportCompletion, ReportCompletionError, RunningJobResult,
     RuntimeError, WorkspaceLifecycle, commit_subject, failure_escalation_reason, non_empty_message,
-    report, should_clear_item_escalation_on_success,
+    report,
 };
 
 pub(crate) enum AgentRunOutcome {
@@ -711,23 +709,18 @@ impl JobDispatcher {
         self.finalize_workspace_after_success(prepared, Some(commit_oid))
             .await?;
 
-        self.db
-            .apply_job_completion(JobCompletionMutation {
+        self.complete_job_service()
+            .execute(CompleteJobCommand {
                 job_id: prepared.job.id,
-                item_id: prepared.item.id,
-                expected_item_revision_id: prepared.job.item_revision_id,
                 outcome_class: OutcomeClass::Clean,
-                clear_item_escalation: should_clear_item_escalation_on_success(
-                    &prepared.item,
-                    &prepared.job,
-                ),
                 result_schema_version: None,
                 result_payload: None,
                 output_commit_oid: Some(commit_oid.clone()),
-                findings: vec![],
-                prepared_convergence_guard: None,
             })
-            .await?;
+            .await
+            .map_err(|error| {
+                RuntimeError::InvalidState(format!("commit completion rejected: {error:?}"))
+            })?;
         self.append_activity(
             prepared.project.id,
             ActivityEventType::JobCompleted,
@@ -985,20 +978,6 @@ impl JobDispatcher {
             }
         }
 
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn finalize_integration_workspace_after_close(
-        &self,
-        project: &Project,
-        workspace: &Workspace,
-    ) -> Result<(), RuntimeError> {
-        let repo_path = self.project_paths(project).mirror_git_dir;
-        remove_workspace(repo_path.as_path(), &workspace.path).await?;
-        let mut workspace = workspace.clone();
-        workspace.mark_abandoned(Utc::now());
-        self.db.update_workspace(&workspace).await?;
         Ok(())
     }
 

@@ -13,11 +13,10 @@ import type {
   PromoteFindingResult,
   Workspace,
 } from '../types/domain'
-
-const BASE = '/api'
+import { getApiBaseUrl } from './base'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',

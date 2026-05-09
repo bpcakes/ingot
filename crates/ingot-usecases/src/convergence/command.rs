@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use ingot_domain::activity::{Activity, ActivityEventType, ActivitySubject};
 use ingot_domain::convergence_queue::{ConvergenceQueueEntry, ConvergenceQueueEntryStatus};
 use ingot_domain::ids::{ActivityId, ItemId, ProjectId};
@@ -22,6 +22,32 @@ pub struct ConvergenceService<P> {
 impl<P> ConvergenceService<P> {
     pub fn new(port: P) -> Self {
         Self { port }
+    }
+}
+
+#[must_use]
+pub fn build_convergence_queue_entry(
+    project_id: ProjectId,
+    item_id: ItemId,
+    revision: &ItemRevision,
+    lane_head_exists: bool,
+    now: DateTime<Utc>,
+) -> ConvergenceQueueEntry {
+    ConvergenceQueueEntry {
+        id: ingot_domain::ids::ConvergenceQueueEntryId::new(),
+        project_id,
+        item_id,
+        item_revision_id: revision.id,
+        target_ref: revision.target_ref.clone(),
+        status: if lane_head_exists {
+            ConvergenceQueueEntryStatus::Queued
+        } else {
+            ConvergenceQueueEntryStatus::Head
+        },
+        head_acquired_at: (!lane_head_exists).then_some(now),
+        created_at: now,
+        updated_at: now,
+        released_at: None,
     }
 }
 
@@ -58,22 +84,13 @@ where
             queue_entry
         } else {
             let now = Utc::now();
-            let queue_entry = ConvergenceQueueEntry {
-                id: ingot_domain::ids::ConvergenceQueueEntryId::new(),
-                project_id: context.project.id,
-                item_id: context.item.id,
-                item_revision_id: context.revision.id,
-                target_ref: context.revision.target_ref.clone(),
-                status: if context.lane_head.is_some() {
-                    ConvergenceQueueEntryStatus::Queued
-                } else {
-                    ConvergenceQueueEntryStatus::Head
-                },
-                head_acquired_at: context.lane_head.is_none().then_some(now),
-                created_at: now,
-                updated_at: now,
-                released_at: None,
-            };
+            let queue_entry = build_convergence_queue_entry(
+                context.project.id,
+                context.item.id,
+                &context.revision,
+                context.lane_head.is_some(),
+                now,
+            );
             self.port.create_queue_entry(&queue_entry).await?;
             self.port
                 .append_activity(&Activity {

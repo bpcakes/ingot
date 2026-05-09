@@ -33,7 +33,7 @@ pub(crate) use job_support::{
     PrepareRunOutcome, PreparedRun, WorkspaceLifecycle, built_in_template, commit_subject,
     failure_escalation_reason, format_revision_context,
     is_inert_assigned_authoring_dispatch_residue, is_supported_runtime_job, non_empty_message,
-    outcome_class_name, should_clear_item_escalation_on_success, supports_job, template_digest,
+    outcome_class_name, supports_job, template_digest,
 };
 pub(crate) use runtime_ports::{
     RuntimeConvergencePort, RuntimeFinalizePort, RuntimeReconciliationPort, drain_until_idle,
@@ -295,10 +295,14 @@ impl JobDispatcher {
     fn complete_job_service(
         &self,
     ) -> CompleteJobService<Database, GitJobCompletionPort, ProjectLocks> {
-        CompleteJobService::new(
+        let state_root = self.config.state_root.clone();
+        CompleteJobService::with_repo_path_resolver(
             self.db.clone(),
             GitJobCompletionPort,
             self.project_locks.clone(),
+            Arc::new(move |project: &Project| {
+                project_repo_paths_for_project(state_root.as_path(), project).mirror_git_dir
+            }),
         )
     }
 

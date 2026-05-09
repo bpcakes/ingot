@@ -205,10 +205,3 @@ pub(crate) fn failure_escalation_reason(
 ) -> Option<EscalationReason> {
     ingot_usecases::dispatch::failure_escalation_reason(job, outcome_class)
 }
-
-pub(crate) fn should_clear_item_escalation_on_success(
-    item: &ingot_domain::item::Item,
-    job: &Job,
-) -> bool {
-    ingot_usecases::dispatch::should_clear_item_escalation_on_success(item, job)
-}

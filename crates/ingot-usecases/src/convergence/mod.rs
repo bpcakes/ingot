@@ -7,7 +7,7 @@ mod test_support;
 mod tests;
 mod types;
 
-pub use command::ConvergenceService;
+pub use command::{ConvergenceService, build_convergence_queue_entry};
 pub use finalization::{
     finalize_prepared_convergence, find_or_create_finalize_operation,
     should_auto_finalize_prepared_convergence, should_invalidate_prepared_convergence,

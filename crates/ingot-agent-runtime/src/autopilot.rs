@@ -196,22 +196,13 @@ impl JobDispatcher {
                 .await
                 .map_err(ingot_usecases::UseCaseError::Repository)?;
             let now = Utc::now();
-            let queue_entry = ingot_domain::convergence_queue::ConvergenceQueueEntry {
-                id: ingot_domain::ids::ConvergenceQueueEntryId::new(),
+            let queue_entry = ingot_usecases::convergence::build_convergence_queue_entry(
                 project_id,
                 item_id,
-                item_revision_id: revision.id,
-                target_ref: revision.target_ref.clone(),
-                status: if lane_head.is_some() {
-                    ingot_domain::convergence_queue::ConvergenceQueueEntryStatus::Queued
-                } else {
-                    ingot_domain::convergence_queue::ConvergenceQueueEntryStatus::Head
-                },
-                head_acquired_at: lane_head.is_none().then_some(now),
-                created_at: now,
-                updated_at: now,
-                released_at: None,
-            };
+                &revision,
+                lane_head.is_some(),
+                now,
+            );
             #[cfg(test)]
             self.pause_before_auto_queue_insert().await;
             match self.db.create_queue_entry(&queue_entry).await {

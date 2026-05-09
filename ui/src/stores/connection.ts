@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { create } from 'zustand'
+import { getWebSocketUrl } from '../api/base'
 import { queryKeys } from '../api/queries'
 import type { AgentOutputSegment, JobLogs, WsEvent } from '../types/domain'
 import { useProjectsStore } from './projects'
@@ -31,8 +32,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 
     set({ status: 'connecting' })
 
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${location.host}/api/ws`)
+    const ws = new WebSocket(getWebSocketUrl())
 
     ws.onopen = () => {
       set({ status: 'connected', ws })

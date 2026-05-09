@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import type { Activity, Agent, ItemDetail, ItemSummary, Job, JobLogs, JsonObject, Project } from '../types/domain'
+import { getApiBaseUrl } from './base'
 import type { DemoTemplateSummary } from './client'
 import * as api from './client'
 
@@ -20,7 +21,7 @@ export const queryKeys = {
 export const healthQuery = () =>
   queryOptions({
     queryKey: queryKeys.health(),
-    queryFn: () => fetch('/api/health').then((r) => r.text()),
+    queryFn: () => fetch(`${getApiBaseUrl()}/health`).then((r) => r.text()),
     staleTime: 10_000,
   })
 
