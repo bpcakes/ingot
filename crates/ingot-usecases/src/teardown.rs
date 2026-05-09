@@ -17,7 +17,7 @@ use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::WorkspaceStatus;
 
 use crate::UseCaseError;
-use crate::job_lifecycle::map_finish_non_success_error;
+use crate::job::map_finish_non_success_error;
 
 /// Result of tearing down a revision lane's active state.
 /// Callers use this to decide what infrastructure side effects to perform

@@ -26,8 +26,7 @@ mod common;
 use common::*;
 use ingot_domain::finding::{FindingSeverity, FindingTriageState};
 use ingot_git::commands::git;
-use ingot_usecases::job::{DispatchJobCommand, dispatch_job};
-use ingot_usecases::job_lifecycle;
+use ingot_usecases::job::{self, DispatchJobCommand, dispatch_job};
 
 fn write_harness_toml(repo_path: &Path, contents: &str) {
     let ingot_dir = repo_path.join(".ingot");
@@ -1290,7 +1289,7 @@ timeout = "30s"
         h.db.get_job(validation_job.id)
             .await
             .expect("reload active job");
-    job_lifecycle::cancel_job(
+    job::cancel_job(
         &h.db,
         &h.db,
         &h.db,

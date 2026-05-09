@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::UseCaseError;
 
-use super::types::{
+use super::{
     ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceApprovalContext,
     ConvergenceCommandPort, ConvergenceQueuePrepareContext, ConvergenceSystemActionPort,
     FinalizeTargetRefResult, PreparedConvergenceFinalizePort, RejectApprovalContext,

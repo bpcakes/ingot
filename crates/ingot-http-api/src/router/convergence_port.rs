@@ -1,12 +1,10 @@
 use ingot_domain::activity::Activity;
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::convergence::Convergence;
-use ingot_domain::convergence::ConvergenceStatus;
-use ingot_domain::convergence_queue::{ConvergenceQueueEntry, ConvergenceQueueEntryStatus};
+use ingot_domain::convergence_queue::ConvergenceQueueEntry;
 use ingot_domain::git_operation::GitOperation;
-use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId};
+use ingot_domain::ids::{ItemId, ProjectId};
 use ingot_domain::item::Item;
-use ingot_domain::job::Job;
 use ingot_domain::ports::FinalizationMutation;
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
@@ -15,8 +13,9 @@ use ingot_git::commands::FinalizeTargetRefOutcome;
 use ingot_git::project_repo::CheckoutFinalizationStatus;
 use ingot_usecases::UseCaseError;
 use ingot_usecases::convergence::{
-    ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceCommandPort,
-    ConvergenceQueuePrepareContext, FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
+    CheckoutFinalizationReadiness, ConvergenceCommandPort, ConvergenceQueuePrepareContext,
+    FinalizeTargetRefResult, PreparedConvergenceFinalizePort, build_convergence_approval_context,
+    build_reject_approval_context,
 };
 use tracing::warn;
 
@@ -37,79 +36,6 @@ impl HttpConvergencePort {
             state: state.clone(),
         }
     }
-}
-
-fn approval_finalize_readiness(
-    prepared_convergence: Option<Convergence>,
-    queue_entry: Option<ConvergenceQueueEntry>,
-    resolved_target_oid: Option<&CommitOid>,
-) -> ApprovalFinalizeReadiness {
-    let Some(convergence) = prepared_convergence else {
-        return ApprovalFinalizeReadiness::MissingPreparedConvergence;
-    };
-
-    let target_valid = convergence
-        .state
-        .input_target_commit_oid()
-        .zip(convergence.state.prepared_commit_oid())
-        .is_some_and(|(input_target_commit_oid, prepared_commit_oid)| {
-            resolved_target_oid == Some(input_target_commit_oid)
-                || resolved_target_oid == Some(prepared_commit_oid)
-        });
-    if !target_valid {
-        return ApprovalFinalizeReadiness::PreparedConvergenceStale;
-    }
-
-    let Some(queue_entry) = queue_entry else {
-        return ApprovalFinalizeReadiness::ConvergenceNotQueued;
-    };
-    if queue_entry.status != ConvergenceQueueEntryStatus::Head {
-        return ApprovalFinalizeReadiness::ConvergenceNotLaneHead;
-    }
-
-    ApprovalFinalizeReadiness::Ready {
-        convergence: Box::new(convergence),
-        queue_entry,
-    }
-}
-
-fn ensure_item_in_project(item: &Item, project_id: ProjectId) -> Result<(), UseCaseError> {
-    if item.project_id == project_id {
-        Ok(())
-    } else {
-        Err(UseCaseError::ItemNotFound)
-    }
-}
-
-fn has_active_job_for_revision(jobs: &[Job], revision_id: ItemRevisionId) -> bool {
-    jobs.iter()
-        .any(|job| job.item_revision_id == revision_id && job.state.is_active())
-}
-
-fn has_active_convergence_for_revision(
-    convergences: &[Convergence],
-    revision_id: ItemRevisionId,
-) -> bool {
-    convergences.iter().any(|convergence| {
-        convergence.item_revision_id == revision_id
-            && matches!(
-                convergence.state.status(),
-                ConvergenceStatus::Queued | ConvergenceStatus::Running
-            )
-    })
-}
-
-fn prepared_convergence_for_revision(
-    convergences: &[Convergence],
-    revision_id: ItemRevisionId,
-) -> Option<Convergence> {
-    convergences
-        .iter()
-        .find(|convergence| {
-            convergence.item_revision_id == revision_id
-                && convergence.state.status() == ConvergenceStatus::Prepared
-        })
-        .cloned()
 }
 
 impl ConvergenceCommandPort for HttpConvergencePort {
@@ -228,7 +154,9 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .get_item(item_id)
                 .await
                 .map_err(repo_to_item_usecase)?;
-            ensure_item_in_project(&item, project_id)?;
+            if item.project_id != project_id {
+                return Err(UseCaseError::ItemNotFound);
+            }
             let revision = state
                 .db
                 .get_revision(item.current_revision_id)
@@ -254,29 +182,20 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .find_active_queue_entry_for_revision(revision.id)
                 .await
                 .map_err(UseCaseError::Repository)?;
-            let revision_id = revision.id;
-            let prepared_convergence =
-                prepared_convergence_for_revision(&convergences, revision_id);
             let resolved_target_oid = state
                 .infra()
                 .resolve_project_ref_oid(project.id, &revision.target_ref)
                 .await?;
 
-            Ok(ingot_usecases::convergence::ConvergenceApprovalContext {
+            build_convergence_approval_context(
                 project,
                 item,
                 revision,
-                has_active_job: has_active_job_for_revision(&jobs, revision_id),
-                has_active_convergence: has_active_convergence_for_revision(
-                    &convergences,
-                    revision_id,
-                ),
-                finalize_readiness: approval_finalize_readiness(
-                    prepared_convergence,
-                    queue_entry,
-                    resolved_target_oid.as_ref(),
-                ),
-            })
+                &jobs,
+                &convergences,
+                queue_entry,
+                resolved_target_oid.as_ref(),
+            )
         }
     }
 
@@ -307,7 +226,9 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .get_item(item_id)
                 .await
                 .map_err(repo_to_item_usecase)?;
-            ensure_item_in_project(&item, project_id)?;
+            if item.project_id != project_id {
+                return Err(UseCaseError::ItemNotFound);
+            }
             let revision = state
                 .db
                 .get_revision(item.current_revision_id)
@@ -324,14 +245,7 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .await
                 .map_err(UseCaseError::Repository)?;
 
-            Ok(ingot_usecases::convergence::RejectApprovalContext {
-                item,
-                has_active_job: has_active_job_for_revision(&jobs, revision.id),
-                has_active_convergence: has_active_convergence_for_revision(
-                    &convergences,
-                    revision.id,
-                ),
-            })
+            build_reject_approval_context(project_id, item, &revision, &jobs, &convergences)
         }
     }
 
@@ -575,7 +489,7 @@ mod tests {
     use ingot_domain::item::ApprovalState;
     use ingot_domain::test_support::{ItemBuilder, ProjectBuilder, RevisionBuilder};
     use ingot_test_support::git::{
-        git_output as support_git_output, temp_git_repo as support_temp_git_repo,
+        git_output as support_git_output, temp_git_repo as support_temp_git_repo, unique_temp_path,
     };
     use ingot_usecases::convergence::ConvergenceCommandPort;
 
@@ -604,9 +518,9 @@ mod tests {
     #[tokio::test]
     async fn convergence_port_rejects_cross_project_approval_context() {
         let state = test_app_state().await;
-        let repo_a = temp_git_repo();
         let repo_b = temp_git_repo();
-        let project_a = ProjectBuilder::new(&repo_a)
+        let missing_repo = unique_temp_path("ingot-http-api-missing-repo");
+        let project_a = ProjectBuilder::new(&missing_repo)
             .id(ProjectId::new())
             .name("A")
             .created_at(Utc::now())

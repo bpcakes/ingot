@@ -26,8 +26,7 @@ use common::*;
 use ingot_agent_protocol::adapter::AgentError;
 use ingot_agent_protocol::request::AgentRequest;
 use ingot_agent_protocol::response::AgentResponse;
-use ingot_usecases::job::{DispatchJobCommand, dispatch_job};
-use ingot_usecases::job_lifecycle;
+use ingot_usecases::job::{self, DispatchJobCommand, dispatch_job};
 
 #[tokio::test]
 async fn tick_executes_a_queued_authoring_job_and_creates_a_commit() {
@@ -680,7 +679,7 @@ async fn run_forever_starts_next_job_after_running_job_cancellation() {
         .await;
 
     let active_job = h.db.get_job(first_job.id).await.expect("reload active job");
-    job_lifecycle::cancel_job(
+    job::cancel_job(
         &h.db,
         &h.db,
         &h.db,

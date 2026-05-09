@@ -9,7 +9,7 @@ use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::WorkspaceStatus;
 use ingot_usecases::dispatch::failure_status;
-use ingot_usecases::job_lifecycle;
+use ingot_usecases::job;
 use ingot_usecases::job_workflows;
 use ingot_usecases::{CompleteJobCommand, UseCaseError, rebuild_revision_context};
 use tracing::warn;
@@ -76,7 +76,7 @@ pub(super) async fn cancel_item_job(
         .into());
     }
 
-    job_lifecycle::cancel_job(
+    job::cancel_job(
         &state.db,
         &state.db,
         &state.db,
@@ -256,7 +256,7 @@ pub(super) async fn fail_job(
         .into());
     }
 
-    job_lifecycle::fail_job(
+    job::fail_job(
         &state.db,
         &state.db,
         &state.db,
@@ -286,7 +286,7 @@ pub(super) async fn expire_job(
         .into());
     }
 
-    job_lifecycle::expire_job(
+    job::expire_job(
         &state.db,
         &state.db,
         &state.db,

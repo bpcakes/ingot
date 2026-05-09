@@ -28,7 +28,7 @@ use ingot_domain::workspace::{WorkspaceKind, WorkspaceStatus};
 use ingot_git::commands::head_oid;
 use ingot_test_support::git::{run_git as git_sync, temp_git_repo, unique_temp_path};
 use ingot_usecases::convergence::ConvergenceSystemActionPort;
-use ingot_usecases::job_lifecycle;
+use ingot_usecases::job;
 use ingot_usecases::{UseCaseError, UseCaseInfraError};
 use sqlx::query;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -274,7 +274,7 @@ async fn run_with_heartbeats_does_not_launch_runner_when_job_is_cancelled_before
         .await;
 
     let active_job = harness.db.get_job(job.id).await.expect("reload active job");
-    job_lifecycle::cancel_job(
+    job::cancel_job(
         &harness.db,
         &harness.db,
         &harness.db,
@@ -783,7 +783,7 @@ timeout = "30s"
         .await;
 
     let active_job = harness.db.get_job(job.id).await.expect("reload active job");
-    job_lifecycle::cancel_job(
+    job::cancel_job(
         &harness.db,
         &harness.db,
         &harness.db,

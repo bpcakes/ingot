@@ -1,22 +1,21 @@
-mod command;
-mod finalization;
-mod system_actions;
+mod flow;
+mod service;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
-mod types;
 
-pub use command::{ConvergenceService, build_convergence_queue_entry};
-pub use finalization::{
-    finalize_prepared_convergence, find_or_create_finalize_operation,
-    should_auto_finalize_prepared_convergence, should_invalidate_prepared_convergence,
-    should_prepare_convergence,
-};
-pub use system_actions::{invalidate_prepared_convergence, promote_queue_heads};
-pub use types::{
+pub use flow::{
     ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceApprovalContext,
     ConvergenceCommandPort, ConvergenceQueuePrepareContext, ConvergenceSystemActionPort,
     FinalizePreparedTrigger, FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
     RejectApprovalContext, RejectApprovalTeardown, SystemActionItemState, SystemActionProjectState,
+    build_convergence_approval_context, build_reject_approval_context,
+    finalize_prepared_convergence, find_or_create_finalize_operation,
+    should_auto_finalize_prepared_convergence, should_invalidate_prepared_convergence,
+    should_prepare_convergence,
+};
+pub use service::{
+    ConvergenceService, build_convergence_queue_entry, invalidate_prepared_convergence,
+    promote_queue_heads,
 };

@@ -1,4 +1,4 @@
-use super::convergence_route_adapter::HttpConvergenceRouteAdapter;
+use super::convergence_port::HttpConvergencePort;
 use super::item_projection::load_item_detail;
 use super::items::build_superseding_revision;
 use super::support::{
@@ -13,6 +13,7 @@ use axum::{Json, Router};
 use ingot_domain::activity::{ActivityEventType, ActivitySubject};
 use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_usecases::UseCaseError;
+use ingot_usecases::convergence::ConvergenceService;
 
 use crate::error::ApiError;
 
@@ -45,9 +46,10 @@ pub(super) async fn prepare_item_convergence(
         .project_locks
         .acquire_project_mutation(project_id)
         .await;
-    HttpConvergenceRouteAdapter::new(&state)
+    convergence_service(&state)
         .queue_prepare(project_id, item_id)
-        .await?;
+        .await
+        .map_err(ApiError::from)?;
     let detail = load_item_detail(&state, project_id, item_id).await?;
     Ok(Json(detail))
 }
@@ -63,9 +65,10 @@ pub(super) async fn approve_item(
         .project_locks
         .acquire_project_mutation(project_id)
         .await;
-    HttpConvergenceRouteAdapter::new(&state)
+    convergence_service(&state)
         .approve_item(project_id, item_id)
-        .await?;
+        .await
+        .map_err(ApiError::from)?;
     let detail = load_item_detail(&state, project_id, item_id).await?;
     Ok(Json(detail))
 }
@@ -110,9 +113,10 @@ pub(super) async fn reject_item_approval(
         build_superseding_revision(&state, &project, &item, &current_revision, &jobs, request)
             .await?;
     let cleared_escalation = item.escalation.is_escalated();
-    let teardown = HttpConvergenceRouteAdapter::new(&state)
+    let teardown = convergence_service(&state)
         .reject_item_approval(project_id, item.id, &next_revision)
-        .await?;
+        .await
+        .map_err(ApiError::from)?;
     append_activity(
         &state,
         project_id,
@@ -138,4 +142,8 @@ pub(super) async fn reject_item_approval(
 
     let detail = load_item_detail(&state, project_id, item.id).await?;
     Ok(Json(detail))
+}
+
+fn convergence_service(state: &AppState) -> ConvergenceService<HttpConvergencePort> {
+    ConvergenceService::new(HttpConvergencePort::new(state))
 }
