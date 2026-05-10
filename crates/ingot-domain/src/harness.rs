@@ -97,11 +97,12 @@ pub fn parse_duration(s: &str) -> Result<Duration, HarnessProfileError> {
         .map_err(|_| HarnessProfileError::InvalidDuration(s.into()))?;
 
     let seconds = match suffix {
-        "s" => value,
-        "m" => value * 60,
-        "h" => value * 3600,
+        "s" => Some(value),
+        "m" => value.checked_mul(60),
+        "h" => value.checked_mul(3600),
         _ => return Err(HarnessProfileError::InvalidDuration(s.into())),
-    };
+    }
+    .ok_or_else(|| HarnessProfileError::InvalidDuration(s.into()))?;
 
     Ok(Duration::from_secs(seconds))
 }
@@ -191,6 +192,11 @@ run = "cargo check"
         assert!(parse_duration("").is_err());
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("5x").is_err());
+    }
+
+    #[test]
+    fn parse_duration_rejects_overflowing_values() {
+        assert!(parse_duration("18446744073709551615h").is_err());
     }
 
     #[test]

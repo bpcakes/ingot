@@ -819,7 +819,7 @@ timeout = "30s"
 }
 
 #[tokio::test]
-async fn prepare_harness_validation_uses_configured_lease_ttl() {
+async fn prepare_harness_validation_leaves_workspace_ready_without_lease_metadata() {
     let mut config = DispatcherConfig::new(unique_temp_path("ingot-runtime-harness-lease"));
     config.lease_ttl = Duration::from_secs(23);
     let harness =
@@ -887,14 +887,10 @@ timeout = "30s"
         .get_job(job.id)
         .await
         .expect("reload running job");
-    let started_at = running_job.state.started_at().expect("started_at");
-    let lease_expires_at = running_job
-        .state
-        .lease_expires_at()
-        .expect("lease_expires_at");
-    let lease_duration = lease_expires_at.signed_duration_since(started_at);
-    assert!(lease_duration <= ChronoDuration::seconds(23));
-    assert!(lease_duration >= ChronoDuration::seconds(22));
+    assert_eq!(running_job.state.status(), JobStatus::Running);
+    assert!(running_job.state.lease_owner_id().is_none());
+    assert!(running_job.state.heartbeat_at().is_none());
+    assert!(running_job.state.lease_expires_at().is_none());
 
     let workspace = harness
         .db
@@ -902,6 +898,76 @@ timeout = "30s"
         .await
         .expect("reload workspace");
     assert_eq!(workspace.state.status(), WorkspaceStatus::Ready);
+}
+
+#[tokio::test]
+async fn prepare_harness_validation_keeps_daemon_only_jobs_without_agent_lease_metadata() {
+    let harness = TestRuntimeHarness::new(Arc::new(BlockingRunner::new())).await;
+
+    let item_id = ingot_domain::ids::ItemId::new();
+    let revision_id = ingot_domain::ids::ItemRevisionId::new();
+    let seed_commit = head_oid(&harness.repo_path)
+        .await
+        .expect("seed head")
+        .into_inner();
+    let item = ItemBuilder::new(harness.project.id, revision_id)
+        .id(item_id)
+        .build();
+    let revision = RevisionBuilder::new(item_id)
+        .id(revision_id)
+        .explicit_seed(seed_commit.as_str())
+        .build();
+    harness
+        .db
+        .create_item_with_revision(&item, &revision)
+        .await
+        .expect("create item");
+
+    write_harness_toml(
+        &harness.repo_path,
+        r#"
+[commands.check]
+run = "true"
+timeout = "30s"
+"#,
+    );
+
+    let job = JobBuilder::new(
+        harness.project.id,
+        item_id,
+        revision_id,
+        StepId::ValidateCandidateInitial,
+    )
+    .phase_kind(PhaseKind::Validate)
+    .workspace_kind(WorkspaceKind::Authoring)
+    .execution_permission(ExecutionPermission::DaemonOnly)
+    .context_policy(ContextPolicy::None)
+    .phase_template_slug("")
+    .job_input(JobInput::candidate_subject(
+        CommitOid::new(seed_commit.clone()),
+        CommitOid::new(seed_commit.clone()),
+    ))
+    .output_artifact_kind(OutputArtifactKind::ValidationReport)
+    .build();
+    harness.db.create_job(&job).await.expect("create job");
+
+    match harness
+        .dispatcher
+        .prepare_harness_validation(harness.db.get_job(job.id).await.expect("load queued job"))
+        .await
+        .expect("prepare harness validation")
+    {
+        PrepareHarnessValidationOutcome::Prepared(_) => {}
+        _ => panic!("expected prepared harness validation"),
+    }
+
+    let running_job = harness.db.get_job(job.id).await.expect("reload job");
+    assert_eq!(running_job.state.status(), JobStatus::Running);
+    assert!(running_job.state.agent_id().is_none());
+    assert!(running_job.state.process_pid().is_none());
+    assert!(running_job.state.lease_owner_id().is_none());
+    assert!(running_job.state.heartbeat_at().is_none());
+    assert!(running_job.state.lease_expires_at().is_none());
 }
 
 #[tokio::test]

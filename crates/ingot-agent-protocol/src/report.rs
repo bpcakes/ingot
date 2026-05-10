@@ -323,6 +323,7 @@ pub fn parse_outcome_class(result_payload: &serde_json::Value) -> Result<Outcome
 // ── v1 deserialization types ────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FindingV1 {
     pub finding_key: String,
     pub code: String,
@@ -333,37 +334,47 @@ pub struct FindingV1 {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidationReportV1 {
     pub outcome: String,
     pub summary: String,
     pub checks: Vec<ValidationCheckV1>,
     pub findings: Vec<FindingV1>,
+    #[serde(default)]
+    pub extensions: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSubjectV1 {
     pub base_commit_oid: CommitOid,
     pub head_commit_oid: CommitOid,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewReportV1 {
     pub outcome: String,
     pub summary: String,
     pub review_subject: ReviewSubjectV1,
     pub overall_risk: ReviewOverallRisk,
     pub findings: Vec<FindingV1>,
+    #[serde(default)]
+    pub extensions: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FindingReportV1 {
     pub outcome: String,
     pub summary: String,
     pub findings: Vec<FindingV1>,
+    #[serde(default)]
+    pub extensions: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ValidationCheckV1 {
     pub name: String,
     pub status: ValidationCheckStatus,
@@ -389,6 +400,7 @@ pub enum ReviewOverallRisk {
 // ── Investigation report v1 types ──────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigationReportV1 {
     pub outcome: String,
     pub summary: String,
@@ -397,6 +409,7 @@ pub struct InvestigationReportV1 {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigationScopeV1 {
     pub description: String,
     pub paths_examined: Vec<String>,
@@ -404,6 +417,7 @@ pub struct InvestigationScopeV1 {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigationFindingV1 {
     pub finding_key: String,
     pub code: String,
@@ -416,6 +430,7 @@ pub struct InvestigationFindingV1 {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigationPromotionV1 {
     pub title: String,
     pub description: String,

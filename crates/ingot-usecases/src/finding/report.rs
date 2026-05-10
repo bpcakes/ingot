@@ -282,8 +282,12 @@ fn validate_validation_report(
         }
     }
 
+    let has_failed_checks = checks
+        .iter()
+        .any(|check| check.status == report::ValidationCheckStatus::Fail);
+
     match outcome {
-        "clean" if findings.is_empty() => Ok(OutcomeClass::Clean),
+        "clean" if findings.is_empty() && !has_failed_checks => Ok(OutcomeClass::Clean),
         "clean" => Err(UseCaseError::ProtocolViolation(
             "clean validation reports must not contain findings or failed checks".into(),
         )),

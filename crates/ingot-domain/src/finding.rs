@@ -153,7 +153,12 @@ impl FindingTriage {
         F: FnMut(FindingTriageState, &'static str) -> E,
     {
         match state {
-            FindingTriageState::Untriaged => Ok(Self::Untriaged),
+            FindingTriageState::Untriaged => {
+                if linked_item_id.is_some() || triage_note.is_some() || triaged_at.is_some() {
+                    return Err(missing_field(state, "untriaged metadata"));
+                }
+                Ok(Self::Untriaged)
+            }
             FindingTriageState::FixNow => Ok(Self::FixNow {
                 triaged_at: required_triage_field(
                     state,
@@ -541,6 +546,32 @@ mod tests {
         let error = serde_json::from_value::<Finding>(value).expect_err("missing triage_note");
         assert!(
             error.to_string().contains("triage_note"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_untriaged_with_resolution_metadata() {
+        let finding = base_finding(FindingTriage::Untriaged);
+        let mut value = serde_json::to_value(finding).expect("serialize");
+        let object = value.as_object_mut().unwrap();
+        object.insert(
+            "linked_item_id".into(),
+            serde_json::to_value(ItemId::new()).expect("item id json"),
+        );
+        object.insert(
+            "triage_note".into(),
+            serde_json::Value::String("already handled".into()),
+        );
+        object.insert(
+            "triaged_at".into(),
+            serde_json::to_value(default_timestamp()).expect("timestamp json"),
+        );
+
+        let error = serde_json::from_value::<Finding>(value)
+            .expect_err("untriaged finding with resolution metadata");
+        assert!(
+            error.to_string().contains("untriaged"),
             "unexpected error: {error}"
         );
     }

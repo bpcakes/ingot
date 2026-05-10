@@ -135,13 +135,15 @@ impl WorkspaceState {
         current_job_id: Option<JobId>,
     ) -> Result<Self, String> {
         match status {
-            WorkspaceStatus::Provisioning => Ok(Self::Provisioning { commits }),
+            WorkspaceStatus::Provisioning => {
+                reject_current_job_id(status, current_job_id)?;
+                Ok(Self::Provisioning { commits })
+            }
             WorkspaceStatus::Ready => Ok(Self::Ready {
-                commits: required_workspace_field(
-                    status,
-                    "base_commit_oid/head_commit_oid",
-                    commits,
-                )?,
+                commits: {
+                    reject_current_job_id(status, current_job_id)?;
+                    required_workspace_field(status, "base_commit_oid/head_commit_oid", commits)?
+                },
             }),
             WorkspaceStatus::Busy => Ok(Self::Busy {
                 commits: required_workspace_field(
@@ -151,17 +153,28 @@ impl WorkspaceState {
                 )?,
                 current_job_id: required_workspace_field(status, "current_job_id", current_job_id)?,
             }),
-            WorkspaceStatus::Stale => Ok(Self::Stale { commits }),
+            WorkspaceStatus::Stale => {
+                reject_current_job_id(status, current_job_id)?;
+                Ok(Self::Stale { commits })
+            }
             WorkspaceStatus::RetainedForDebug => Ok(Self::RetainedForDebug {
-                commits: required_workspace_field(
-                    status,
-                    "base_commit_oid/head_commit_oid",
-                    commits,
-                )?,
+                commits: {
+                    reject_current_job_id(status, current_job_id)?;
+                    required_workspace_field(status, "base_commit_oid/head_commit_oid", commits)?
+                },
             }),
-            WorkspaceStatus::Error => Ok(Self::Error { commits }),
-            WorkspaceStatus::Removing => Ok(Self::Removing { commits }),
-            WorkspaceStatus::Abandoned => Ok(Self::Abandoned { commits }),
+            WorkspaceStatus::Error => {
+                reject_current_job_id(status, current_job_id)?;
+                Ok(Self::Error { commits })
+            }
+            WorkspaceStatus::Removing => {
+                reject_current_job_id(status, current_job_id)?;
+                Ok(Self::Removing { commits })
+            }
+            WorkspaceStatus::Abandoned => {
+                reject_current_job_id(status, current_job_id)?;
+                Ok(Self::Abandoned { commits })
+            }
         }
     }
 
@@ -505,6 +518,20 @@ fn required_workspace_field<T>(
     value.ok_or_else(|| format!("workspace {field} is required for {status:?}"))
 }
 
+fn reject_current_job_id(
+    status: WorkspaceStatus,
+    current_job_id: Option<JobId>,
+) -> Result<(), String> {
+    if current_job_id.is_some() {
+        return Err(format!(
+            "workspace current_job_id is only valid for {:?}, got {status:?}",
+            WorkspaceStatus::Busy
+        ));
+    }
+
+    Ok(())
+}
+
 impl TryFrom<WorkspaceWire> for Workspace {
     type Error = String;
 
@@ -637,6 +664,25 @@ mod tests {
             .insert("current_job_id".into(), serde_json::Value::Null);
 
         let error = serde_json::from_value::<Workspace>(value).expect_err("missing current_job_id");
+        assert!(
+            error.to_string().contains("current_job_id"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_non_busy_workspace_with_current_job_id() {
+        let ws = base_workspace(WorkspaceState::Ready {
+            commits: ready_commits(),
+        });
+        let mut value = serde_json::to_value(ws).expect("serialize");
+        value.as_object_mut().unwrap().insert(
+            "current_job_id".into(),
+            serde_json::to_value(JobId::new()).expect("job id json"),
+        );
+
+        let error =
+            serde_json::from_value::<Workspace>(value).expect_err("ready workspace with job id");
         assert!(
             error.to_string().contains("current_job_id"),
             "unexpected error: {error}"

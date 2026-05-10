@@ -26,7 +26,10 @@ use ingot_git::project_repo::{
 };
 use ingot_workspace::remove_workspace;
 
-use crate::{JobDispatcher, RuntimeError, is_inert_assigned_authoring_dispatch_residue};
+use crate::{
+    JobDispatcher, RuntimeError, harness::is_daemon_only_validation,
+    is_inert_assigned_authoring_dispatch_residue,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FinalizeCompletionOutcome {
@@ -620,6 +623,10 @@ impl JobDispatcher {
     }
 
     async fn reconcile_running_job(&self, job: Job) -> Result<bool, RuntimeError> {
+        if is_daemon_only_validation(&job) && job.state.lease().is_none() {
+            return Ok(false);
+        }
+
         let expired = job
             .state
             .lease_expires_at()

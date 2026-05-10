@@ -249,7 +249,7 @@ impl JobAssignment {
     }
 }
 
-/// Active execution lease. Present only during Running.
+/// Active execution lease for externally supervised jobs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobLease {
     pub process_pid: Option<u32>,
@@ -303,7 +303,7 @@ pub enum JobState {
 
     Running {
         assignment: JobAssignment,
-        lease: JobLease,
+        lease: Option<JobLease>,
     },
 
     Completed {
@@ -361,6 +361,26 @@ fn required_field<T>(field: &'static str, value: Option<T>) -> Result<T, String>
     value.ok_or_else(|| format!("job {field} is required for this status"))
 }
 
+fn running_lease_from_parts(parts: JobStateParts) -> Result<Option<JobLease>, String> {
+    let has_lease_metadata = parts.process_pid.is_some()
+        || parts.lease_owner_id.is_some()
+        || parts.heartbeat_at.is_some()
+        || parts.lease_expires_at.is_some()
+        || parts.started_at.is_some();
+
+    if !has_lease_metadata {
+        return Ok(None);
+    }
+
+    Ok(Some(JobLease {
+        process_pid: parts.process_pid,
+        lease_owner_id: required_field("lease_owner_id", parts.lease_owner_id)?,
+        heartbeat_at: required_field("heartbeat_at", parts.heartbeat_at)?,
+        lease_expires_at: required_field("lease_expires_at", parts.lease_expires_at)?,
+        started_at: required_field("started_at", parts.started_at)?,
+    }))
+}
+
 impl JobState {
     #[must_use]
     pub fn status(&self) -> JobStatus {
@@ -408,7 +428,7 @@ impl JobState {
     #[must_use]
     pub fn started_at(&self) -> Option<DateTime<Utc>> {
         match self {
-            Self::Running { lease, .. } => Some(lease.started_at),
+            Self::Running { lease, .. } => lease.as_ref().map(|lease| lease.started_at),
             Self::Completed { started_at, .. } | Self::Terminated { started_at, .. } => *started_at,
             _ => None,
         }
@@ -483,7 +503,9 @@ impl JobState {
     #[must_use]
     pub fn lease(&self) -> Option<&JobLease> {
         match self {
-            Self::Running { lease, .. } => Some(lease),
+            Self::Running {
+                lease: Some(lease), ..
+            } => Some(lease),
             _ => None,
         }
     }
@@ -523,7 +545,10 @@ impl JobState {
         match self {
             Self::Queued => (None, None),
             Self::Assigned(assignment) => (Some(assignment), None),
-            Self::Running { assignment, lease } => (Some(assignment), Some(lease.started_at)),
+            Self::Running { assignment, lease } => (
+                Some(assignment),
+                lease.as_ref().map(|lease| lease.started_at),
+            ),
             Self::Completed {
                 assignment,
                 started_at,
@@ -587,13 +612,7 @@ impl JobState {
             JobStatus::Assigned => Ok(Self::Assigned(required_field("workspace_id", assignment)?)),
             JobStatus::Running => Ok(Self::Running {
                 assignment: required_field("workspace_id", assignment)?,
-                lease: JobLease {
-                    process_pid: parts.process_pid,
-                    lease_owner_id: required_field("lease_owner_id", parts.lease_owner_id)?,
-                    heartbeat_at: required_field("heartbeat_at", parts.heartbeat_at)?,
-                    lease_expires_at: required_field("lease_expires_at", parts.lease_expires_at)?,
-                    started_at: required_field("started_at", parts.started_at)?,
-                },
+                lease: running_lease_from_parts(parts)?,
             }),
             JobStatus::Completed => Ok(Self::Completed {
                 assignment,
@@ -875,13 +894,13 @@ mod tests {
     fn deserialize_rejects_running_jobs_without_workspace_id() {
         let mut value = serde_json::to_value(base_job(JobState::Running {
             assignment: JobAssignment::new(WorkspaceId::new()),
-            lease: JobLease {
+            lease: Some(JobLease {
                 process_pid: Some(42),
                 lease_owner_id: "lease-owner".into(),
                 heartbeat_at: default_timestamp(),
                 lease_expires_at: default_timestamp(),
                 started_at: default_timestamp(),
-            },
+            }),
         }))
         .expect("serialize running job");
         value

@@ -120,5 +120,29 @@ async fn load_available_workspace(
     }
 
     ensure_workspace_not_busy(&workspace)?;
+    ensure_workspace_has_no_active_jobs(state, workspace.id).await?;
     Ok(workspace)
+}
+
+async fn ensure_workspace_has_no_active_jobs(
+    state: &AppState,
+    workspace_id: WorkspaceId,
+) -> Result<(), ApiError> {
+    let jobs = state
+        .db
+        .list_active_jobs()
+        .await
+        .map_err(repo_to_internal)?;
+    let has_active_workspace_job = jobs
+        .iter()
+        .any(|job| job.state.workspace_id() == Some(workspace_id));
+
+    if has_active_workspace_job {
+        return Err(ApiError::Conflict {
+            code: "workspace_busy",
+            message: "Workspace has an active job".into(),
+        });
+    }
+
+    Ok(())
 }

@@ -39,7 +39,7 @@ impl BranchName {
             value
         };
 
-        if branch_name.is_empty() {
+        if !is_valid_target_branch_name(branch_name) {
             return Err(TargetRefParseError::new(value));
         }
 
@@ -51,6 +51,32 @@ impl BranchName {
     pub fn to_git_ref(&self) -> GitRef {
         GitRef::new(format!("refs/heads/{}", self.0))
     }
+}
+
+fn is_valid_target_branch_name(branch_name: &str) -> bool {
+    if branch_name.is_empty()
+        || branch_name == "@"
+        || branch_name.starts_with('-')
+        || branch_name.starts_with('/')
+        || branch_name.ends_with('/')
+        || branch_name.ends_with('.')
+        || branch_name.contains("//")
+        || branch_name.contains("..")
+        || branch_name.contains("@{")
+    {
+        return false;
+    }
+
+    !branch_name.split('/').any(|component| {
+        component.is_empty()
+            || component.starts_with('.')
+            || component.ends_with(".lock")
+            || component.bytes().any(|byte| {
+                byte <= 0x20
+                    || byte == 0x7f
+                    || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
+            })
+    })
 }
 
 impl fmt::Display for BranchName {

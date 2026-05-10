@@ -10,10 +10,10 @@ use glob::glob;
 use ingot_domain::harness::{HarnessCommand, HarnessProfile, HarnessProfileError};
 use ingot_domain::ids::WorkspaceId;
 use ingot_domain::job::{
-    ExecutionPermission, Job, JobAssignment, JobStatus, OutcomeClass, PhaseKind,
+    ExecutionPermission, Job, JobAssignment, JobState, JobStatus, OutcomeClass, PhaseKind,
 };
+use ingot_domain::ports::FinishJobNonSuccessParams;
 use ingot_domain::ports::ProjectMutationLockPort;
-use ingot_domain::ports::{FinishJobNonSuccessParams, StartJobExecutionParams};
 use ingot_domain::step_id::StepId;
 use ingot_domain::workspace::WorkspaceKind;
 use ingot_git::diff::changed_paths_between;
@@ -188,20 +188,11 @@ impl JobDispatcher {
             self.db.create_workspace(&workspace).await?;
         }
 
-        job.assign(JobAssignment::new(workspace.id));
+        job.state = JobState::Running {
+            assignment: JobAssignment::new(workspace.id),
+            lease: None,
+        };
         self.db.update_job(&job).await?;
-        self.db
-            .start_job_execution(StartJobExecutionParams {
-                job_id: job.id,
-                item_id: job.item_id,
-                expected_item_revision_id: job.item_revision_id,
-                workspace_id: Some(workspace.id),
-                agent_id: None,
-                lease_owner_id: self.lease_owner_id.clone(),
-                process_pid: None,
-                lease_expires_at: now + self.lease_ttl(),
-            })
-            .await?;
 
         Ok(PrepareHarnessValidationOutcome::Prepared(Box::new(
             PreparedHarnessValidation {
@@ -435,29 +426,10 @@ impl JobDispatcher {
     }
 
     async fn refresh_daemon_validation_heartbeat(&self, prepared: &PreparedHarnessValidation) {
-        let lease_expires_at = self.next_lease_expiration();
-        if let Err(error) = self
-            .db
-            .heartbeat_job_execution(
-                prepared.job_id,
-                prepared.item_id,
-                prepared.revision_id,
-                &self.lease_owner_id,
-                lease_expires_at,
-            )
-            .await
-        {
-            warn!(
-                ?error,
-                job_id = %prepared.job_id,
-                "daemon-only validation heartbeat update failed"
-            );
-        } else {
-            debug!(
-                job_id = %prepared.job_id,
-                "daemon-only validation heartbeat updated"
-            );
-        }
+        debug!(
+            job_id = %prepared.job_id,
+            "daemon-only validation heartbeat observed"
+        );
     }
 
     pub(crate) async fn run_harness_command_with_heartbeats(

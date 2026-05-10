@@ -1328,6 +1328,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completion_rejects_clean_validation_reports_with_failed_checks() {
+        let service = test_service(test_context(test_job(
+            "validate_candidate_initial",
+            OutputArtifactKind::ValidationReport,
+        )));
+
+        let result = service
+            .execute(CompleteJobCommand {
+                job_id: JobId::from_uuid(Uuid::nil()),
+                outcome_class: OutcomeClass::Clean,
+                result_schema_version: Some("validation_report:v1".into()),
+                result_payload: Some(json!({
+                    "outcome": "clean",
+                    "summary": "claimed clean despite a failed check",
+                    "checks": [{
+                        "name": "test",
+                        "status": "fail",
+                        "summary": "tests failed"
+                    }],
+                    "findings": [],
+                    "extensions": null
+                })),
+                output_commit_oid: None,
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(CompleteJobError::UseCase(UseCaseError::ProtocolViolation(message)))
+                if message.contains("failed checks")
+        ));
+    }
+
+    #[tokio::test]
+    async fn completion_rejects_report_payloads_with_unscoped_extra_fields() {
+        let service = test_service(test_context(test_job(
+            "validate_candidate_initial",
+            OutputArtifactKind::ValidationReport,
+        )));
+
+        let result = service
+            .execute(CompleteJobCommand {
+                job_id: JobId::from_uuid(Uuid::nil()),
+                outcome_class: OutcomeClass::Clean,
+                result_schema_version: Some("validation_report:v1".into()),
+                result_payload: Some(json!({
+                    "outcome": "clean",
+                    "summary": "ok",
+                    "checks": [],
+                    "findings": [],
+                    "extensions": null,
+                    "unexpected_provider_data": {
+                        "must_live_under": "extensions"
+                    }
+                })),
+                output_commit_oid: None,
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(CompleteJobError::UseCase(UseCaseError::ProtocolViolation(message)))
+                if message.contains("unknown field") || message.contains("unexpected_provider_data")
+        ));
+    }
+
+    #[tokio::test]
     async fn completion_supports_commit_jobs_without_report_payloads() {
         let mut job = test_job("repair_candidate", OutputArtifactKind::Commit);
         job.phase_kind = PhaseKind::Author;

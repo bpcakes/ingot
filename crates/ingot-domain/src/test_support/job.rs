@@ -248,13 +248,13 @@ impl JobBuilder {
                 });
                 JobState::Running {
                     assignment,
-                    lease: JobLease {
+                    lease: Some(JobLease {
                         process_pid: self.process_pid,
                         lease_owner_id,
                         heartbeat_at: self.heartbeat_at.unwrap_or_else(Utc::now),
                         lease_expires_at: self.lease_expires_at.unwrap_or_else(Utc::now),
                         started_at: self.started_at.unwrap_or_else(Utc::now),
-                    },
+                    }),
                 }
             }
             JobStatus::Completed => JobState::Completed {

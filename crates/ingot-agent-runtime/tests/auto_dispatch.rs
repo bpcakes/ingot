@@ -1071,7 +1071,7 @@ async fn run_forever_executes_daemon_only_validation_job() {
 }
 
 #[tokio::test]
-async fn run_forever_refreshes_heartbeat_for_daemon_only_validation_job() {
+async fn run_forever_keeps_daemon_only_validation_job_unleased() {
     let mut config = DispatcherConfig::new(unique_temp_path(
         "ingot-runtime-daemon-validation-heartbeat",
     ));
@@ -1152,35 +1152,19 @@ timeout = "30s"
             Duration::from_secs(2),
         )
         .await;
-    let initial_heartbeat = running_job
-        .state
-        .heartbeat_at()
-        .expect("initial validation heartbeat");
+    assert!(running_job.state.lease_owner_id().is_none());
+    assert!(running_job.state.heartbeat_at().is_none());
+    assert!(running_job.state.lease_expires_at().is_none());
 
-    let refreshed_job = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let job =
-                h.db.get_job(validation_job.id)
-                    .await
-                    .expect("reload validation job");
-            if job
-                .state
-                .heartbeat_at()
-                .is_some_and(|heartbeat| heartbeat > initial_heartbeat)
-            {
-                return job;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("timed out waiting for validation heartbeat refresh");
-    assert!(
-        refreshed_job
-            .state
-            .heartbeat_at()
-            .is_some_and(|heartbeat| heartbeat > initial_heartbeat)
-    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let still_running_job =
+        h.db.get_job(validation_job.id)
+            .await
+            .expect("reload validation job");
+    assert_eq!(still_running_job.state.status(), JobStatus::Running);
+    assert!(still_running_job.state.lease_owner_id().is_none());
+    assert!(still_running_job.state.heartbeat_at().is_none());
+    assert!(still_running_job.state.lease_expires_at().is_none());
 
     h.wait_for_job_status(
         validation_job.id,

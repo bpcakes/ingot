@@ -1576,7 +1576,6 @@ async fn reconcile_startup_adopts_remove_workspace_ref_operation() {
         .no_target_ref()
         .workspace_ref("refs/ingot/workspaces/remove-adopt")
         .retention_policy(RetentionPolicy::Ephemeral)
-        .current_job_id(ingot_domain::ids::JobId::new())
         .created_at(created_at)
         .build();
     db.create_workspace(&workspace)

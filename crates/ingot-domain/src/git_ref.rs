@@ -153,6 +153,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_target_ref_rejects_git_invalid_branch_names() {
+        for invalid_ref in [
+            "main..evil",
+            "feature//double-slash",
+            "release.lock",
+            "topic@{bad",
+            "-leading-dash",
+        ] {
+            let error = GitRef::parse_target_ref(invalid_ref)
+                .err()
+                .unwrap_or_else(|| panic!("expected invalid ref: {invalid_ref}"));
+            assert_eq!(
+                error.to_string(),
+                format!("invalid target ref: {invalid_ref}")
+            );
+        }
+    }
+
+    #[test]
     fn parse_target_ref_only_rejects_empty_branch_names() {
         for invalid_ref in ["", "refs/heads/"] {
             let error = GitRef::parse_target_ref(invalid_ref)
