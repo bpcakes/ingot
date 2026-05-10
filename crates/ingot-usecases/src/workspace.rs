@@ -8,14 +8,15 @@ use ingot_domain::git_operation::{
 };
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{GitOperationId, ProjectId};
-use ingot_domain::ports::{ActivityRepository, GitOperationRepository, WorkspaceRepository};
+use ingot_domain::ports::WorkspaceRepository;
 use ingot_domain::workspace::{Workspace, WorkspaceKind, WorkspaceStatus};
 
 use crate::UseCaseError;
 use crate::git_operation_journal::{create_planned, mark_applied};
+use crate::store::WorkspaceCommandStore;
 
-pub async fn abandon_workspace<W: WorkspaceRepository>(
-    workspace_repo: &W,
+pub async fn abandon_workspace<S: WorkspaceRepository>(
+    store: &S,
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError> {
     if workspace.state.status() == WorkspaceStatus::Abandoned {
@@ -23,27 +24,27 @@ pub async fn abandon_workspace<W: WorkspaceRepository>(
     }
     let mut updated = workspace.clone();
     updated.mark_abandoned(Utc::now());
-    workspace_repo.update(&updated).await?;
+    <S as WorkspaceRepository>::update(store, &updated).await?;
     Ok(updated)
 }
 
-pub async fn plan_workspace_removal<W: WorkspaceRepository>(
-    workspace_repo: &W,
+pub async fn plan_workspace_removal<S: WorkspaceRepository>(
+    store: &S,
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError> {
     let mut updated = workspace.clone();
     updated.mark_removing(Utc::now());
-    workspace_repo.update(&updated).await?;
+    <S as WorkspaceRepository>::update(store, &updated).await?;
     Ok(updated)
 }
 
-pub async fn finalize_workspace_removal<W: WorkspaceRepository>(
-    workspace_repo: &W,
+pub async fn finalize_workspace_removal<S: WorkspaceRepository>(
+    store: &S,
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError> {
     let mut updated = workspace.clone();
     updated.mark_abandoned(Utc::now());
-    workspace_repo.update(&updated).await?;
+    <S as WorkspaceRepository>::update(store, &updated).await?;
     Ok(updated)
 }
 
@@ -76,18 +77,14 @@ pub trait WorkspaceInfraPort: Send + Sync {
     ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
 }
 
-pub async fn reset_workspace<W, GO, A, G>(
-    workspace_repo: &W,
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn reset_workspace<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError>
 where
-    W: WorkspaceRepository,
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: WorkspaceCommandStore,
     G: WorkspaceInfraPort,
 {
     let expected_head = workspace
@@ -111,7 +108,7 @@ where
         created_at: now,
         completed_at: None,
     };
-    create_planned(git_op_repo, activity_repo, &operation, project_id).await?;
+    create_planned(store, store, &operation, project_id).await?;
 
     git_port
         .reset_worktree(
@@ -125,31 +122,26 @@ where
 
     let mut updated = workspace.clone();
     updated.mark_ready_with_head(expected_head, Utc::now());
-    workspace_repo
-        .update(&updated)
+    <S as WorkspaceRepository>::update(store, &updated)
         .await
         .map_err(UseCaseError::Repository)?;
 
-    mark_applied(git_op_repo, &mut operation).await?;
+    mark_applied(store, &mut operation).await?;
 
     Ok(updated)
 }
 
-pub async fn remove_workspace_full<W, GO, A, G>(
-    workspace_repo: &W,
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn remove_workspace_full<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError>
 where
-    W: WorkspaceRepository,
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: WorkspaceCommandStore,
     G: WorkspaceInfraPort,
 {
-    let workspace = plan_workspace_removal(workspace_repo, workspace).await?;
+    let workspace = plan_workspace_removal(store, workspace).await?;
 
     if workspace.path.exists() {
         git_port
@@ -174,11 +166,11 @@ where
                 created_at: now,
                 completed_at: None,
             };
-            create_planned(git_op_repo, activity_repo, &operation, project_id).await?;
+            create_planned(store, store, &operation, project_id).await?;
             git_port.delete_ref(project_id, workspace_ref).await?;
-            mark_applied(git_op_repo, &mut operation).await?;
+            mark_applied(store, &mut operation).await?;
         }
     }
 
-    finalize_workspace_removal(workspace_repo, &workspace).await
+    finalize_workspace_removal(store, &workspace).await
 }

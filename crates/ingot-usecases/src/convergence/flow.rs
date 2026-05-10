@@ -537,6 +537,7 @@ mod finalization {
     use ingot_workflow::{Evaluator, NamedRecommendedAction, RecommendedAction};
 
     use crate::UseCaseError;
+    use crate::store::FinalizeOperationStore;
 
     use super::types::{
         CheckoutFinalizationReadiness, FinalizePreparedTrigger, FinalizeTargetRefResult,
@@ -596,7 +597,7 @@ mod finalization {
         operation: &GitOperation,
     ) -> Result<GitOperation, UseCaseError>
     where
-        DB: GitOperationRepository + ActivityRepository,
+        DB: FinalizeOperationStore,
     {
         let convergence_id = match &operation.entity {
             GitOperationEntityRef::Convergence(id) => *id,
@@ -616,19 +617,22 @@ mod finalization {
             return Ok(existing);
         }
 
-        match db.create(operation).await {
+        match <DB as GitOperationRepository>::create(db, operation).await {
             Ok(()) => {
-                db.append(&Activity {
-                    id: ActivityId::new(),
-                    project_id: operation.project_id,
-                    event_type: ActivityEventType::GitOperationPlanned,
-                    subject: ActivitySubject::GitOperation(operation.id),
-                    payload: serde_json::json!({
-                        "operation_kind": operation.operation_kind(),
-                        "entity_id": operation.entity.entity_id_string(),
-                    }),
-                    created_at: Utc::now(),
-                })
+                <DB as ActivityRepository>::append(
+                    db,
+                    &Activity {
+                        id: ActivityId::new(),
+                        project_id: operation.project_id,
+                        event_type: ActivityEventType::GitOperationPlanned,
+                        subject: ActivitySubject::GitOperation(operation.id),
+                        payload: serde_json::json!({
+                            "operation_kind": operation.operation_kind(),
+                            "entity_id": operation.entity.entity_id_string(),
+                        }),
+                        created_at: Utc::now(),
+                    },
+                )
                 .await
                 .map_err(UseCaseError::Repository)?;
                 Ok(operation.clone())

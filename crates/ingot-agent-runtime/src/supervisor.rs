@@ -183,7 +183,7 @@ impl JobDispatcher {
         &self,
         project_id: ingot_domain::ids::ProjectId,
     ) -> Result<(), RuntimeError> {
-        ingot_usecases::convergence::promote_queue_heads(&self.db, &self.db, project_id)
+        ingot_usecases::convergence::promote_queue_heads(&self.db, project_id)
             .await
             .map_err(|e| RuntimeError::InvalidState(e.to_string()))?;
         Ok(())

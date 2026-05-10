@@ -131,8 +131,6 @@ impl JobDispatcher {
 
         let result = ingot_usecases::dispatch::auto_dispatch_review(
             &self.db,
-            &self.db,
-            &self.db,
             project,
             &item,
             &revision,
@@ -176,8 +174,6 @@ impl JobDispatcher {
         convergences: &[Convergence],
     ) -> Result<Option<Job>, RuntimeError> {
         ingot_usecases::dispatch::auto_dispatch_validation(
-            &self.db,
-            &self.db,
             &self.db,
             project,
             item,

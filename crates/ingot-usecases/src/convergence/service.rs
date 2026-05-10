@@ -265,14 +265,12 @@ mod system_actions {
     use ingot_domain::convergence::{Convergence, ConvergenceStatus};
     use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
     use ingot_domain::item::Item;
-    use ingot_domain::ports::{
-        ActivityRepository, ConvergenceQueueRepository, InvalidatePreparedConvergenceMutation,
-        InvalidatePreparedConvergenceRepository, WorkspaceRepository,
-    };
+    use ingot_domain::ports::InvalidatePreparedConvergenceMutation;
     use ingot_domain::revision::ItemRevision;
 
     use crate::UseCaseError;
     use crate::item::approval_state_for_policy;
+    use crate::store::{ConvergenceQueuePromotionStore, PreparedConvergenceInvalidationStore};
 
     use super::command::ConvergenceService;
     use super::finalization::{
@@ -381,16 +379,14 @@ mod system_actions {
         }
     }
 
-    pub async fn promote_queue_heads<CQ, A>(
-        queue_repo: &CQ,
-        activity_repo: &A,
+    pub async fn promote_queue_heads<S>(
+        store: &S,
         project_id: ingot_domain::ids::ProjectId,
     ) -> Result<bool, UseCaseError>
     where
-        CQ: ConvergenceQueueRepository,
-        A: ActivityRepository,
+        S: ConvergenceQueuePromotionStore,
     {
-        let entries = queue_repo.list_active_by_project(project_id).await?;
+        let entries = store.list_active_by_project(project_id).await?;
         let mut lanes_with_heads = entries
             .iter()
             .filter(|entry| entry.status == ConvergenceQueueEntryStatus::Head)
@@ -409,8 +405,8 @@ mod system_actions {
             entry.status = ConvergenceQueueEntryStatus::Head;
             entry.head_acquired_at = Some(Utc::now());
             entry.updated_at = Utc::now();
-            queue_repo.update(&entry).await?;
-            activity_repo
+            store.update(&entry).await?;
+            store
                 .append(&Activity {
                     id: ingot_domain::ids::ActivityId::new(),
                     project_id,
@@ -430,16 +426,14 @@ mod system_actions {
         Ok(promoted)
     }
 
-    pub async fn invalidate_prepared_convergence<W, T>(
-        workspace_repo: &W,
-        invalidate_repo: &T,
+    pub async fn invalidate_prepared_convergence<S>(
+        store: &S,
         item: &mut Item,
         revision: &ItemRevision,
         convergences: &[Convergence],
     ) -> Result<bool, UseCaseError>
     where
-        W: WorkspaceRepository,
-        T: InvalidatePreparedConvergenceRepository,
+        S: PreparedConvergenceInvalidationStore,
     {
         let mut convergence = match convergences
             .iter()
@@ -457,7 +451,7 @@ mod system_actions {
 
         let workspace_update =
             if let Some(workspace_id) = convergence.state.integration_workspace_id() {
-                let mut workspace = workspace_repo.get(workspace_id).await?;
+                let mut workspace = store.get(workspace_id).await?;
                 workspace.mark_stale(Utc::now());
                 Some(workspace)
             } else {
@@ -476,7 +470,7 @@ mod system_actions {
             created_at: Utc::now(),
         };
 
-        invalidate_repo
+        store
             .apply_invalidate_prepared_convergence(InvalidatePreparedConvergenceMutation {
                 convergence,
                 workspace_update,

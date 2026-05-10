@@ -6,9 +6,8 @@ use ingot_domain::ids::{ActivityId, FindingId, ItemId, ProjectId};
 use ingot_domain::item::{ApprovalState, Item};
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ActivityRepository, ConvergenceRepository, FindingRepository, GitOperationRepository,
-    ItemRepository, JobRepository, ProjectMutationLockPort, ProjectRepository, RepositoryError,
-    RevisionRepository, WorkspaceRepository,
+    ActivityRepository, FindingRepository, ItemRepository, JobRepository, ProjectMutationLockPort,
+    ProjectRepository, RepositoryError, RevisionRepository,
 };
 use ingot_domain::project::Project;
 use ingot_domain::revision::{ApprovalPolicy, ItemRevision};
@@ -28,6 +27,7 @@ use crate::finding::{
 };
 use crate::item::{next_sort_key, next_sort_key_after, pending_approval_state};
 use crate::job::{DispatchJobCommand, dispatch_job};
+use crate::store::{ApplyFindingTriageStore, BatchPromoteFindingsStore, PromoteFindingStore};
 
 #[derive(Clone, Debug)]
 pub struct TriageFindingCommand {
@@ -84,15 +84,7 @@ pub async fn apply_finding_triage<R, I, L>(
     command: TriageFindingCommand,
 ) -> Result<AppliedFindingTriage, UseCaseError>
 where
-    R: FindingRepository
-        + ItemRepository
-        + RevisionRepository
-        + ProjectRepository
-        + JobRepository
-        + ActivityRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + ConvergenceRepository,
+    R: ApplyFindingTriageStore,
     I: ApplicationInfraPort + DispatchInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -228,15 +220,7 @@ where
         &applied.finding,
     )
     .await?;
-    maybe_cleanup_investigation_ref(
-        repo,
-        repo,
-        repo,
-        infra,
-        source_item.project_id,
-        &applied.finding,
-    )
-    .await?;
+    maybe_cleanup_investigation_ref(repo, infra, source_item.project_id, &applied.finding).await?;
 
     append_activity(
         repo,
@@ -273,15 +257,7 @@ pub async fn promote_finding<R, I, L>(
     command: PromoteFindingCommand,
 ) -> Result<PromoteFindingOutput, UseCaseError>
 where
-    R: FindingRepository
-        + ItemRepository
-        + RevisionRepository
-        + ProjectRepository
-        + JobRepository
-        + ActivityRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + ConvergenceRepository,
+    R: PromoteFindingStore,
     I: ApplicationInfraPort + DispatchInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -345,12 +321,7 @@ pub async fn batch_promote_findings_command<R, L>(
     command: BatchPromoteFindingsCommand,
 ) -> Result<BatchPromoteOutput, UseCaseError>
 where
-    R: ProjectRepository
-        + FindingRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository,
+    R: BatchPromoteFindingsStore,
     L: ProjectMutationLockPort,
 {
     if command.finding_ids.is_empty() {
@@ -434,14 +405,7 @@ async fn dispatch_projected_item_job<R, I>(
     dispatch_origin: &'static str,
 ) -> Result<Option<Job>, UseCaseError>
 where
-    R: ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + FindingRepository
-        + ConvergenceRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + ActivityRepository,
+    R: PromoteFindingStore,
     I: ApplicationInfraPort + DispatchInfraPort,
 {
     let item = <R as ItemRepository>::get(repo, item_id)
@@ -473,9 +437,6 @@ where
         },
     )?;
     let prepared = prepare_and_persist_dispatched_job(
-        repo,
-        repo,
-        repo,
         repo,
         infra,
         project,
@@ -553,7 +514,7 @@ async fn maybe_enter_approval_after_finding_triage<R>(
     finding: &Finding,
 ) -> Result<(), UseCaseError>
 where
-    R: JobRepository + FindingRepository + ItemRepository + ActivityRepository,
+    R: ActivityRepository + FindingRepository + ItemRepository + JobRepository,
 {
     if finding.source_step_id != StepId::ValidateIntegrated
         || source_item.current_revision_id != source_revision.id
@@ -680,25 +641,27 @@ where
     Ok(next_sort_key(&items))
 }
 
-async fn append_activity<A>(
-    activity_repo: &A,
+async fn append_activity<S>(
+    activity_repo: &S,
     project_id: ProjectId,
     event_type: ActivityEventType,
     subject: ActivitySubject,
     payload: serde_json::Value,
 ) -> Result<(), UseCaseError>
 where
-    A: ActivityRepository,
+    S: ActivityRepository,
 {
-    activity_repo
-        .append(&Activity {
+    <S as ActivityRepository>::append(
+        activity_repo,
+        &Activity {
             id: ActivityId::new(),
             project_id,
             event_type,
             subject,
             payload,
             created_at: Utc::now(),
-        })
-        .await?;
+        },
+    )
+    .await?;
     Ok(())
 }

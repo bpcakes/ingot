@@ -26,6 +26,7 @@ pub mod locking;
 pub mod notify;
 pub mod reconciliation;
 pub mod revision_context;
+pub mod store;
 pub mod teardown;
 pub mod ui_events;
 pub mod workspace;

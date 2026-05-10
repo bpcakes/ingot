@@ -12,6 +12,7 @@ use ingot_domain::step_id::StepId;
 use tracing::info;
 
 use crate::UseCaseError;
+use crate::store::AutoTriageStore;
 
 use super::triage::{
     BacklogFindingOverrides, TriageFindingInput, backlog_finding_with_promotion,
@@ -114,12 +115,8 @@ pub fn auto_triage_findings(
     Ok(results)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn execute_auto_triage<F, I, R, A>(
-    finding_repo: &F,
-    item_repo: &I,
-    revision_repo: &R,
-    activity_repo: &A,
+pub async fn execute_auto_triage<S>(
+    store: &S,
     project: &Project,
     item: &Item,
     job_id: JobId,
@@ -127,12 +124,9 @@ pub async fn execute_auto_triage<F, I, R, A>(
     policy: &AutoTriagePolicy,
 ) -> Result<Vec<AutoTriagedFinding>, UseCaseError>
 where
-    F: FindingRepository,
-    I: ItemRepository,
-    R: RevisionRepository,
-    A: ActivityRepository,
+    S: AutoTriageStore,
 {
-    let all_findings = finding_repo.list_by_item(item.id).await?;
+    let all_findings = <S as FindingRepository>::list_by_item(store, item.id).await?;
     let job_findings: Vec<_> = all_findings
         .into_iter()
         .filter(|f| f.source_job_id == job_id && f.triage.is_unresolved())
@@ -142,22 +136,28 @@ where
         return Ok(vec![]);
     }
 
-    let revision = revision_repo.get(item.current_revision_id).await?;
-    let existing_items = item_repo.list_by_project(item.project_id).await?;
+    let revision = <S as RevisionRepository>::get(store, item.current_revision_id).await?;
+    let existing_items = <S as ItemRepository>::list_by_project(store, item.project_id).await?;
 
     let results = auto_triage_findings(&job_findings, policy, item, &revision, &existing_items)?;
 
     for result in &results {
         if let Some((ref linked_item, ref linked_revision)) = result.backlog {
-            finding_repo
-                .link_backlog(&result.finding, linked_item, linked_revision, None)
-                .await?;
+            <S as FindingRepository>::link_backlog(
+                store,
+                &result.finding,
+                linked_item,
+                linked_revision,
+                None,
+            )
+            .await?;
         } else {
-            finding_repo.triage(&result.finding).await?;
+            <S as FindingRepository>::triage(store, &result.finding).await?;
         }
 
-        activity_repo
-            .append(&Activity {
+        <S as ActivityRepository>::append(
+            store,
+            &Activity {
                 id: ActivityId::new(),
                 project_id: project.id,
                 event_type: ActivityEventType::FindingTriaged,
@@ -169,12 +169,13 @@ where
                     "linked_item_id": result.finding.triage.linked_item_id(),
                 }),
                 created_at: Utc::now(),
-            })
-            .await?;
+            },
+        )
+        .await?;
     }
 
     if step_id == StepId::ValidateIntegrated && item.current_revision_id == revision.id {
-        let updated_findings = finding_repo.list_by_item(item.id).await?;
+        let updated_findings = <S as FindingRepository>::list_by_item(store, item.id).await?;
         let job_findings_after: Vec<_> = updated_findings
             .iter()
             .filter(|f| f.source_job_id == job_id && f.source_item_revision_id == revision.id)
@@ -186,24 +187,26 @@ where
             });
 
         if all_resolved_non_blocking {
-            let mut current_item = item_repo.get(item.id).await?;
+            let mut current_item = <S as ItemRepository>::get(store, item.id).await?;
             let next_approval_state = crate::item::pending_approval_state(revision.approval_policy);
             if current_item.approval_state != next_approval_state {
                 current_item.approval_state = next_approval_state;
                 current_item.updated_at = Utc::now();
-                item_repo.update(&current_item).await?;
+                <S as ItemRepository>::update(store, &current_item).await?;
 
                 if next_approval_state == ApprovalState::Pending {
-                    activity_repo
-                        .append(&Activity {
+                    <S as ActivityRepository>::append(
+                        store,
+                        &Activity {
                             id: ActivityId::new(),
                             project_id: project.id,
                             event_type: ActivityEventType::ApprovalRequested,
                             subject: ActivitySubject::Item(item.id),
                             payload: serde_json::json!({ "source": "auto_triage" }),
                             created_at: Utc::now(),
-                        })
-                        .await?;
+                        },
+                    )
+                    .await?;
                 }
             }
         }

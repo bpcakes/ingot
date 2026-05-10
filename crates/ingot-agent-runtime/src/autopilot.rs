@@ -44,8 +44,6 @@ impl JobDispatcher {
 
         let result = ingot_usecases::dispatch::auto_dispatch_autopilot(
             &self.db,
-            &self.db,
-            &self.db,
             project,
             &item,
             &revision,
@@ -109,9 +107,6 @@ impl JobDispatcher {
         };
         let job = self.db.get_job(job_id).await?;
         let results = ingot_usecases::finding::execute_auto_triage(
-            &self.db,
-            &self.db,
-            &self.db,
             &self.db,
             project,
             item,

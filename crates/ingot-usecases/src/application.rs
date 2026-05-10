@@ -10,9 +10,8 @@ use ingot_domain::ids::{ItemId, JobId, ProjectId};
 use ingot_domain::item::Item;
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ConvergenceQueueRepository, ConvergenceRepository, FindingRepository, GitOperationRepository,
-    ItemRepository, JobRepository, ProjectRepository, RevisionContextRepository,
-    RevisionLaneTeardownRepository, RevisionRepository, WorkspaceRepository,
+    ConvergenceRepository, FindingRepository, ItemRepository, JobRepository, ProjectRepository,
+    RevisionRepository, WorkspaceRepository,
 };
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
@@ -22,6 +21,10 @@ use crate::dispatch::{
     current_authoring_head_for_revision_with_workspace, effective_authoring_base_commit_oid,
 };
 use crate::revision_context::rebuild_revision_context;
+use crate::store::{
+    ApplicationJobContextStore, ItemRuntimeSnapshotStore, RevisionContextStore,
+    RevisionLaneTeardownSideEffectStore,
+};
 use crate::teardown::{RevisionLaneTeardownResult, teardown_revision_lane};
 
 pub trait ApplicationInfraPort: Send + Sync {
@@ -81,12 +84,7 @@ pub async fn refresh_revision_context_for_job<R, I>(
     job_id: JobId,
 ) -> Result<(), UseCaseError>
 where
-    R: JobRepository
-        + ItemRepository
-        + RevisionRepository
-        + ProjectRepository
-        + WorkspaceRepository
-        + RevisionContextRepository,
+    R: ApplicationJobContextStore,
     I: ApplicationInfraPort,
 {
     let job = <R as JobRepository>::get(repo, job_id).await?;
@@ -104,7 +102,7 @@ pub async fn load_item_runtime_snapshot<R, I>(
     item: &Item,
 ) -> Result<ItemRuntimeSnapshot, UseCaseError>
 where
-    R: RevisionRepository + JobRepository + FindingRepository + ConvergenceRepository,
+    R: ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort,
 {
     let current_revision = <R as RevisionRepository>::get(repo, item.current_revision_id).await?;
@@ -146,7 +144,7 @@ pub async fn refresh_revision_context_for_item<R, I>(
     revision: &ItemRevision,
 ) -> Result<(), UseCaseError>
 where
-    R: JobRepository + WorkspaceRepository + RevisionContextRepository,
+    R: RevisionContextStore,
     I: ApplicationInfraPort,
 {
     let jobs = <R as JobRepository>::list_by_item(repo, item.id).await?;
@@ -186,20 +184,10 @@ pub async fn teardown_revision_lane_with_side_effects<R, I>(
     revision: &ItemRevision,
 ) -> Result<RevisionLaneTeardownResult, UseCaseError>
 where
-    R: JobRepository
-        + ConvergenceRepository
-        + ConvergenceQueueRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + RevisionLaneTeardownRepository
-        + ItemRepository
-        + RevisionContextRepository,
+    R: RevisionLaneTeardownSideEffectStore,
     I: ApplicationInfraPort,
 {
-    let result = teardown_revision_lane(
-        repo, repo, repo, repo, repo, repo, project.id, item_id, revision,
-    )
-    .await?;
+    let result = teardown_revision_lane(repo, project.id, item_id, revision).await?;
 
     let item = <R as ItemRepository>::get(repo, item_id).await?;
     refresh_revision_context_for_item(repo, infra, &item, revision).await?;

@@ -148,7 +148,6 @@ impl JobDispatcher {
 
         let invalidated = ingot_usecases::convergence::invalidate_prepared_convergence(
             &self.db,
-            &self.db,
             &mut item,
             &revision,
             &convergences,

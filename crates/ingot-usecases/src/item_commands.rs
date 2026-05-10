@@ -9,10 +9,8 @@ use ingot_domain::item::{
 };
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ActivityRepository, ConvergenceQueueRepository, ConvergenceRepository, FindingRepository,
-    GitOperationRepository, ItemRepository, JobRepository, ProjectMutationLockPort,
-    ProjectRepository, RepositoryError, RevisionContextRepository, RevisionLaneTeardownRepository,
-    RevisionRepository, WorkspaceRepository,
+    ActivityRepository, ItemRepository, JobRepository, ProjectMutationLockPort, ProjectRepository,
+    RepositoryError, RevisionRepository, WorkspaceRepository,
 };
 use ingot_domain::project::Project;
 use ingot_domain::revision::{ApprovalPolicy, AuthoringBaseSeed, ItemRevision};
@@ -26,6 +24,10 @@ use crate::item::{
     CreateInvestigationInput, CreateItemInput, approval_state_for_policy,
     create_investigation_item, create_manual_item, default_policy_snapshot,
     default_template_map_snapshot, next_sort_key, rework_budgets_from_policy_snapshot,
+};
+use crate::store::{
+    CreateItemStore, ItemRevisionMutationStore, ProjectedReviewDispatchStore, ReopenItemStore,
+    ResumeItemStore, UpdateItemStore,
 };
 
 #[derive(Clone, Debug)]
@@ -82,7 +84,7 @@ pub async fn create_item<R, I, L>(
     command: CreateItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository + ItemRepository + ActivityRepository,
+    R: CreateItemStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -178,7 +180,7 @@ pub async fn update_item<R, L>(
     command: UpdateItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository + ItemRepository + ActivityRepository,
+    R: UpdateItemStore,
     L: ProjectMutationLockPort,
 {
     let _project = <R as ProjectRepository>::get(repo, command.project_id)
@@ -225,17 +227,7 @@ pub async fn revise_item<R, I, L>(
     command: ReviseItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository
-        + ConvergenceRepository
-        + ConvergenceQueueRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + RevisionLaneTeardownRepository
-        + RevisionContextRepository,
+    R: ItemRevisionMutationStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -299,17 +291,7 @@ pub async fn defer_item<R, I, L>(
     item_id: ItemId,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository
-        + ConvergenceRepository
-        + ConvergenceQueueRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + RevisionLaneTeardownRepository
-        + RevisionContextRepository,
+    R: ItemRevisionMutationStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -353,14 +335,7 @@ pub async fn resume_item<R, I, L>(
     item_id: ItemId,
 ) -> Result<(ItemCommandOutput, AutoDispatchResult), UseCaseError>
 where
-    R: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + FindingRepository
-        + ConvergenceRepository
-        + WorkspaceRepository
-        + ActivityRepository,
+    R: ResumeItemStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -400,17 +375,7 @@ pub async fn finish_item_manually<R, I, L>(
     event_type: ActivityEventType,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository
-        + ConvergenceRepository
-        + ConvergenceQueueRepository
-        + WorkspaceRepository
-        + GitOperationRepository
-        + RevisionLaneTeardownRepository
-        + RevisionContextRepository,
+    R: ItemRevisionMutationStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -455,12 +420,7 @@ pub async fn reopen_item<R, I, L>(
     command: ReviseItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository
-        + WorkspaceRepository,
+    R: ReopenItemStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -534,13 +494,7 @@ pub async fn auto_dispatch_projected_review_job<R, I>(
     item_id: ItemId,
 ) -> AutoDispatchResult
 where
-    R: ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + FindingRepository
-        + ConvergenceRepository
-        + WorkspaceRepository
-        + ActivityRepository,
+    R: ProjectedReviewDispatchStore,
     I: ApplicationInfraPort,
 {
     let item = <R as ItemRepository>::get(repo, item_id)
@@ -548,8 +502,6 @@ where
         .map_err(map_item_get_error)?;
     let snapshot = load_item_runtime_snapshot(repo, infra, project.id, &item).await?;
     auto_dispatch_review(
-        repo,
-        repo,
         repo,
         project,
         &item,
@@ -757,29 +709,31 @@ async fn next_project_sort_key<R>(repo: &R, project_id: ProjectId) -> Result<Str
 where
     R: ItemRepository,
 {
-    let items = repo.list_by_project(project_id).await?;
+    let items = <R as ItemRepository>::list_by_project(repo, project_id).await?;
     Ok(next_sort_key(&items))
 }
 
-async fn append_activity<A>(
-    activity_repo: &A,
+async fn append_activity<S>(
+    activity_repo: &S,
     project_id: ProjectId,
     event_type: ActivityEventType,
     subject: ActivitySubject,
     payload: serde_json::Value,
 ) -> Result<(), UseCaseError>
 where
-    A: ActivityRepository,
+    S: ActivityRepository,
 {
-    activity_repo
-        .append(&Activity {
+    <S as ActivityRepository>::append(
+        activity_repo,
+        &Activity {
             id: ActivityId::new(),
             project_id,
             event_type,
             subject,
             payload,
             created_at: Utc::now(),
-        })
-        .await?;
+        },
+    )
+    .await?;
     Ok(())
 }

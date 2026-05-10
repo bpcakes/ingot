@@ -473,8 +473,6 @@ async fn resume_route_returns_success_when_projected_review_auto_dispatch_cannot
 
     let result = ingot_usecases::dispatch::auto_dispatch_review(
         &db,
-        &db,
-        &db,
         &project,
         &item,
         &revision,

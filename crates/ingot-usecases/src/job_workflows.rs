@@ -6,14 +6,13 @@ use ingot_domain::ids::{ActivityId, ProjectId};
 use ingot_domain::item::ApprovalState;
 use ingot_domain::job::{Job, OutcomeClass};
 use ingot_domain::ports::{
-    ActivityRepository, ConvergenceRepository, FindingRepository, ItemRepository,
-    JobCompletionGitPort, JobCompletionRepository, JobRepository, ProjectMutationLockPort,
-    ProjectRepository, RepositoryError, RevisionContextRepository, RevisionRepository,
-    WorkspaceRepository,
+    ActivityRepository, ItemRepository, JobCompletionGitPort, JobRepository,
+    ProjectMutationLockPort, ProjectRepository, RepositoryError,
 };
 
 use crate::application::{ApplicationInfraPort, refresh_revision_context_for_job};
 use crate::item_commands::auto_dispatch_projected_review_job;
+use crate::store::JobWorkflowStore;
 use crate::{
     CompleteJobCommand, CompleteJobError, CompleteJobResult, CompleteJobService, UseCaseError,
 };
@@ -33,7 +32,7 @@ pub struct CompleteJobWorkflowOutput {
 
 impl<R, G, L> CompleteJobExecutor for CompleteJobService<R, G, L>
 where
-    R: JobCompletionRepository,
+    R: ingot_domain::ports::JobCompletionRepository,
     G: JobCompletionGitPort,
     L: ProjectMutationLockPort,
 {
@@ -53,15 +52,7 @@ pub async fn complete_job_workflow<R, I, C, L>(
     command: CompleteJobCommand,
 ) -> Result<CompleteJobWorkflowOutput, CompleteJobError>
 where
-    R: JobRepository
-        + ItemRepository
-        + ProjectRepository
-        + RevisionRepository
-        + WorkspaceRepository
-        + RevisionContextRepository
-        + ActivityRepository
-        + FindingRepository
-        + ConvergenceRepository,
+    R: JobWorkflowStore,
     I: ApplicationInfraPort,
     C: CompleteJobExecutor,
     L: ProjectMutationLockPort,
@@ -160,25 +151,27 @@ fn map_item_get_to_completion_error(error: RepositoryError) -> CompleteJobError 
     }
 }
 
-async fn append_activity<A>(
-    activity_repo: &A,
+async fn append_activity<S>(
+    activity_repo: &S,
     project_id: ProjectId,
     event_type: ActivityEventType,
     subject: ActivitySubject,
     payload: serde_json::Value,
 ) -> Result<(), UseCaseError>
 where
-    A: ActivityRepository,
+    S: ActivityRepository,
 {
-    activity_repo
-        .append(&Activity {
+    <S as ActivityRepository>::append(
+        activity_repo,
+        &Activity {
             id: ActivityId::new(),
             project_id,
             event_type,
             subject,
             payload,
             created_at: Utc::now(),
-        })
-        .await?;
+        },
+    )
+    .await?;
     Ok(())
 }

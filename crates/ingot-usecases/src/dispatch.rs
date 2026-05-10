@@ -631,10 +631,7 @@ use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{ActivityId, GitOperationId, ItemId, ItemRevisionId, JobId, ProjectId};
 use ingot_domain::item::{EscalationReason, Item};
 use ingot_domain::job::{ExecutionPermission, Job, JobInput, JobStatus, OutcomeClass};
-use ingot_domain::ports::{
-    ActivityRepository, FindingRepository, GitOperationRepository, JobRepository,
-    WorkspaceRepository,
-};
+use ingot_domain::ports::{ActivityRepository, JobRepository, WorkspaceRepository};
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
@@ -644,6 +641,10 @@ use ingot_workflow::{ClosureRelevance, Evaluator, step};
 use crate::UseCaseError;
 use crate::authoring_history::build_candidate_subject_input;
 use crate::git_operation_journal::{create_planned, mark_applied};
+use crate::store::{
+    AutoDispatchStore, DispatchCleanupStore, DispatchStore, FindingCleanupStore,
+    InvestigationRefStore,
+};
 
 pub use planning::{DispatchJobCommand, dispatch_job, retry_job};
 
@@ -710,9 +711,8 @@ struct EnsuredAuthoringWorkspace {
     created: bool,
 }
 
-pub async fn plan_and_apply_investigation_ref<GO, A, G>(
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn plan_and_apply_investigation_ref<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     entity: GitOperationEntityRef,
@@ -720,8 +720,7 @@ pub async fn plan_and_apply_investigation_ref<GO, A, G>(
     commit_oid: &CommitOid,
 ) -> Result<(), UseCaseError>
 where
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: InvestigationRefStore,
     G: DispatchInfraPort,
 {
     let mut operation = GitOperation {
@@ -737,45 +736,38 @@ where
         created_at: Utc::now(),
         completed_at: None,
     };
-    create_planned(git_op_repo, activity_repo, &operation, project_id).await?;
+    create_planned(store, store, &operation, project_id).await?;
     git_port
         .update_ref(project_id, ref_name, commit_oid)
         .await?;
-    mark_applied(git_op_repo, &mut operation).await?;
+    mark_applied(store, &mut operation).await?;
     Ok(())
 }
 
-pub async fn cleanup_failed_dispatch<W, GO, G>(
-    workspace_repo: &W,
-    git_op_repo: &GO,
+pub async fn cleanup_failed_dispatch<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     precreated_workspace: Option<&Workspace>,
     investigation_ref_name: Option<&GitRef>,
 ) where
-    W: WorkspaceRepository,
-    GO: GitOperationRepository,
+    S: DispatchCleanupStore,
     G: DispatchInfraPort,
 {
     if let Some(workspace) = precreated_workspace {
         let _ = git_port.remove_workspace_files(project_id, workspace).await;
-        let _ = workspace_repo.delete(workspace.id).await;
+        let _ = store.delete(workspace.id).await;
     }
 
     if let Some(ref_name) = investigation_ref_name {
         let _ = git_port.delete_ref(project_id, ref_name).await;
-        let _ = git_op_repo
-            .delete_investigation_ref_operations(ref_name)
-            .await;
+        let _ = store.delete_investigation_ref_operations(ref_name).await;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn apply_pending_investigation_ref_or_cleanup<W, J, GO, A, G>(
-    workspace_repo: &W,
-    job_repo: &J,
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn apply_pending_investigation_ref_or_cleanup<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     job_id: JobId,
@@ -783,18 +775,14 @@ pub async fn apply_pending_investigation_ref_or_cleanup<W, J, GO, A, G>(
     precreated_workspace: Option<&Workspace>,
 ) -> Result<(), UseCaseError>
 where
-    W: WorkspaceRepository,
-    J: JobRepository,
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: DispatchStore,
     G: DispatchInfraPort,
 {
     let Some(pending_ref) = pending_ref else {
         return Ok(());
     };
     if let Err(error) = plan_and_apply_investigation_ref(
-        git_op_repo,
-        activity_repo,
+        store,
         git_port,
         project_id,
         GitOperationEntityRef::Job(job_id),
@@ -804,32 +792,27 @@ where
     .await
     {
         cleanup_failed_dispatch(
-            workspace_repo,
-            git_op_repo,
+            store,
             git_port,
             project_id,
             precreated_workspace,
             Some(&pending_ref.ref_name),
         )
         .await;
-        let _ = job_repo.delete(job_id).await;
+        let _ = JobRepository::delete(store, job_id).await;
         return Err(error);
     }
     Ok(())
 }
 
-pub async fn maybe_cleanup_investigation_ref<F, GO, A, G>(
-    finding_repo: &F,
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn maybe_cleanup_investigation_ref<S, G>(
+    store: &S,
     git_port: &G,
     project_id: ProjectId,
     finding: &Finding,
 ) -> Result<(), UseCaseError>
 where
-    F: FindingRepository,
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: FindingCleanupStore,
     G: DispatchInfraPort,
 {
     if finding.source_step_id != StepId::InvestigateItem
@@ -838,7 +821,7 @@ where
         return Ok(());
     }
 
-    let remaining_unresolved = finding_repo
+    let remaining_unresolved = store
         .list_by_item(finding.source_item_id)
         .await
         .map_err(UseCaseError::Repository)?
@@ -868,9 +851,9 @@ where
         created_at: Utc::now(),
         completed_at: None,
     };
-    create_planned(git_op_repo, activity_repo, &operation, project_id).await?;
+    create_planned(store, store, &operation, project_id).await?;
     git_port.delete_ref(project_id, &ref_name).await?;
-    mark_applied(git_op_repo, &mut operation).await?;
+    mark_applied(store, &mut operation).await?;
     Ok(())
 }
 
@@ -1101,11 +1084,8 @@ fn ensure_dispatch_context_matches(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn prepare_and_persist_dispatched_job<J, W, GO, A, G>(
-    job_repo: &J,
-    workspace_repo: &W,
-    git_op_repo: &GO,
-    activity_repo: &A,
+pub async fn prepare_and_persist_dispatched_job<S, G>(
+    store: &S,
     git_port: &G,
     project: &Project,
     item: &Item,
@@ -1115,17 +1095,14 @@ pub async fn prepare_and_persist_dispatched_job<J, W, GO, A, G>(
     activity: DispatchActivityContext,
 ) -> Result<PreparedDispatchedJob, UseCaseError>
 where
-    J: JobRepository,
-    W: WorkspaceRepository,
-    GO: GitOperationRepository,
-    A: ActivityRepository,
+    S: DispatchStore,
     G: DispatchInfraPort,
 {
     ensure_dispatch_context_matches(project, item, revision, &job)?;
 
     let mut precreated_authoring_workspace = None;
     let pending_investigation_ref = bind_dispatch_subjects_if_needed(
-        workspace_repo,
+        store,
         git_port,
         project,
         revision,
@@ -1135,10 +1112,9 @@ where
     )
     .await?;
 
-    if let Err(error) = job_repo.create(&job).await {
+    if let Err(error) = JobRepository::create(store, &job).await {
         cleanup_failed_dispatch(
-            workspace_repo,
-            git_op_repo,
+            store,
             git_port,
             project.id,
             precreated_authoring_workspace.as_ref(),
@@ -1151,10 +1127,7 @@ where
     }
 
     apply_pending_investigation_ref_or_cleanup(
-        workspace_repo,
-        job_repo,
-        git_op_repo,
-        activity_repo,
+        store,
         git_port,
         project.id,
         job.id,
@@ -1164,24 +1137,12 @@ where
     .await?;
 
     if precreated_authoring_workspace.is_none() && job.workspace_kind == WorkspaceKind::Authoring {
-        let _ = ensure_authoring_workspace_persisted(
-            workspace_repo,
-            git_port,
-            project.id,
-            revision,
-            &job,
-        )
-        .await?;
+        let _ = ensure_authoring_workspace_persisted(store, git_port, project.id, revision, &job)
+            .await?;
     }
 
-    append_job_dispatched_activity_with_context(
-        activity_repo,
-        project.id,
-        item.id,
-        &job,
-        &activity,
-    )
-    .await?;
+    append_job_dispatched_activity_with_context(store, project.id, item.id, &job, &activity)
+        .await?;
 
     Ok(PreparedDispatchedJob { job })
 }
@@ -1397,10 +1358,8 @@ where
 /// Returns `Some(job)` if a review was dispatched, `None` if not dispatchable.
 /// Does NOT handle workspace provisioning or investigation refs — callers do that.
 #[allow(clippy::too_many_arguments)]
-pub async fn auto_dispatch_review<J, W, A>(
-    job_repo: &J,
-    workspace_repo: &W,
-    activity_repo: &A,
+pub async fn auto_dispatch_review<S>(
+    store: &S,
     project: &Project,
     item: &Item,
     revision: &ItemRevision,
@@ -1409,14 +1368,12 @@ pub async fn auto_dispatch_review<J, W, A>(
     convergences: &[Convergence],
 ) -> Result<Option<Job>, UseCaseError>
 where
-    J: JobRepository,
-    W: WorkspaceRepository,
-    A: ActivityRepository,
+    S: AutoDispatchStore,
 {
     auto_dispatch_closure_relevant_step(
-        job_repo,
-        workspace_repo,
-        activity_repo,
+        store,
+        store,
+        store,
         project,
         item,
         revision,
@@ -1436,10 +1393,8 @@ where
 ///
 /// Returns `Some(job)` if a validation step was dispatched, `None` if not dispatchable.
 #[allow(clippy::too_many_arguments)]
-pub async fn auto_dispatch_validation<J, W, A>(
-    job_repo: &J,
-    workspace_repo: &W,
-    activity_repo: &A,
+pub async fn auto_dispatch_validation<S>(
+    store: &S,
     project: &Project,
     item: &Item,
     revision: &ItemRevision,
@@ -1448,14 +1403,12 @@ pub async fn auto_dispatch_validation<J, W, A>(
     convergences: &[Convergence],
 ) -> Result<Option<Job>, UseCaseError>
 where
-    J: JobRepository,
-    W: WorkspaceRepository,
-    A: ActivityRepository,
+    S: AutoDispatchStore,
 {
     auto_dispatch_closure_relevant_step(
-        job_repo,
-        workspace_repo,
-        activity_repo,
+        store,
+        store,
+        store,
         project,
         item,
         revision,
@@ -1475,10 +1428,8 @@ where
 /// Human gates (approval, escalation, findings triage) are respected: the evaluator
 /// will not set `dispatchable_step_id` when those gates are active.
 #[allow(clippy::too_many_arguments)]
-pub async fn auto_dispatch_autopilot<J, W, A>(
-    job_repo: &J,
-    workspace_repo: &W,
-    activity_repo: &A,
+pub async fn auto_dispatch_autopilot<S>(
+    store: &S,
     project: &Project,
     item: &Item,
     revision: &ItemRevision,
@@ -1488,9 +1439,7 @@ pub async fn auto_dispatch_autopilot<J, W, A>(
     author_initial_head_commit_oid: Option<CommitOid>,
 ) -> Result<Option<Job>, UseCaseError>
 where
-    J: JobRepository,
-    W: WorkspaceRepository,
-    A: ActivityRepository,
+    S: AutoDispatchStore,
 {
     let evaluation = Evaluator::new().evaluate(item, revision, jobs, findings, convergences);
     let Some(step_id) = evaluation.dispatchable_step_id else {
@@ -1511,9 +1460,7 @@ where
     let needs_authoring_workspace = should_fill_candidate_subject_from_workspace(job.step_id)
         || needs_mutable_authoring_head(&job);
     let authoring_workspace = if needs_authoring_workspace {
-        workspace_repo
-            .find_authoring_for_revision(revision.id)
-            .await?
+        store.find_authoring_for_revision(revision.id).await?
     } else {
         None
     };
@@ -1537,8 +1484,8 @@ where
         )?;
     }
 
-    job_repo.create(&job).await?;
-    append_job_dispatched_activity(activity_repo, project.id, item.id, &job, "autopilot").await?;
+    JobRepository::create(store, &job).await?;
+    append_job_dispatched_activity(store, project.id, item.id, &job, "autopilot").await?;
 
     Ok(Some(job))
 }
@@ -1550,6 +1497,7 @@ mod tests {
     use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId, WorkspaceId};
     use ingot_domain::item::ApprovalState;
     use ingot_domain::job::{ExecutionPermission, Job, JobInput, OutputArtifactKind, PhaseKind};
+    use ingot_domain::ports::GitOperationRepository;
     use ingot_domain::project::ExecutionMode;
     use ingot_domain::revision::{ApprovalPolicy, AuthoringBaseSeed};
     use ingot_domain::test_support::{
@@ -1767,7 +1715,7 @@ mod tests {
             operations.iter().all(|operation| !matches!(
                 &operation.payload,
                 OperationPayload::CreateInvestigationRef { ref_name, .. }
-                    if ref_name == &pending_investigation_ref.ref_name
+                    if *ref_name == pending_investigation_ref.ref_name
             )),
             "pending investigation ref should not be persisted during binding"
         );
@@ -1908,9 +1856,6 @@ mod tests {
 
         let error = prepare_and_persist_dispatched_job(
             &db,
-            &db,
-            &db,
-            &db,
             &FakeDispatchInfra::resolving("target-head"),
             &project,
             &item,
@@ -1976,9 +1921,6 @@ mod tests {
             .expect("persist duplicate job blocker");
 
         let error = prepare_and_persist_dispatched_job(
-            &db,
-            &db,
-            &db,
             &db,
             &FakeDispatchInfra::resolving("target-head"),
             &project,
@@ -2082,8 +2024,6 @@ mod tests {
 
         let job = auto_dispatch_autopilot(
             &db,
-            &db,
-            &db,
             &project,
             &item,
             &revision,
@@ -2134,20 +2074,9 @@ mod tests {
             .await
             .expect("persist item");
 
-        let error = auto_dispatch_autopilot(
-            &db,
-            &db,
-            &db,
-            &project,
-            &item,
-            &revision,
-            &[],
-            &[],
-            &[],
-            None,
-        )
-        .await
-        .expect_err("implicit author_initial requires a live target head");
+        let error = auto_dispatch_autopilot(&db, &project, &item, &revision, &[], &[], &[], None)
+            .await
+            .expect_err("implicit author_initial requires a live target head");
 
         assert!(
             error

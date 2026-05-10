@@ -751,9 +751,6 @@ async fn execute_auto_triage_transitions_approval_for_validate_integrated() {
 
     execute_auto_triage(
         &db,
-        &db,
-        &db,
-        &db,
         &project,
         &item,
         job_id,
@@ -855,9 +852,6 @@ async fn execute_auto_triage_does_not_transition_approval_for_fix_now_findings()
 
     execute_auto_triage(
         &db,
-        &db,
-        &db,
-        &db,
         &project,
         &item,
         job_id,
@@ -945,9 +939,6 @@ async fn execute_auto_triage_skips_approval_for_non_validate_integrated() {
     };
 
     execute_auto_triage(
-        &db,
-        &db,
-        &db,
         &db,
         &project,
         &item,

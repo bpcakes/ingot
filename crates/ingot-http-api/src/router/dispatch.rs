@@ -73,9 +73,6 @@ pub(super) async fn dispatch_item_job(
     let infra = state.infra();
     let prepared = prepare_and_persist_dispatched_job(
         &state.db,
-        &state.db,
-        &state.db,
-        &state.db,
         &infra,
         &project,
         &item,
@@ -142,9 +139,6 @@ pub(super) async fn retry_item_job(
     let retry_no = job.retry_no;
     let infra = state.infra();
     let prepared = prepare_and_persist_dispatched_job(
-        &state.db,
-        &state.db,
-        &state.db,
         &state.db,
         &infra,
         &project,
@@ -276,7 +270,6 @@ mod tests {
         let infra = super::super::infra_ports::HttpInfraAdapter::new(&state);
         ingot_usecases::dispatch::cleanup_failed_dispatch(
             &state.db,
-            &state.db,
             &infra,
             project.id,
             Some(&workspace),
@@ -378,7 +371,6 @@ mod tests {
 
         let infra = super::super::infra_ports::HttpInfraAdapter::new(&state);
         ingot_usecases::dispatch::cleanup_failed_dispatch(
-            &state.db,
             &state.db,
             &infra,
             project.id,

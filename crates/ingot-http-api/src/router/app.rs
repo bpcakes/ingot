@@ -171,11 +171,9 @@ pub(crate) async fn teardown_revision_lane_state(
     item_id: ItemId,
     revision: &ItemRevision,
 ) -> Result<RevisionLaneTeardown, UseCaseError> {
-    let uc_result = ingot_usecases::teardown::teardown_revision_lane(
-        &state.db, &state.db, &state.db, &state.db, &state.db, &state.db, project.id, item_id,
-        revision,
-    )
-    .await?;
+    let uc_result =
+        ingot_usecases::teardown::teardown_revision_lane(&state.db, project.id, item_id, revision)
+            .await?;
 
     let item = state
         .db
