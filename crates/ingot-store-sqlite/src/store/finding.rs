@@ -8,8 +8,8 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Sqlite, Transaction};
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, required_row, row_get,
-    row_get_json, row_get_optional_json,
+    db_err, db_text, db_write_err, ensure_rows_affected, json_err, map_optional_row,
+    optional_db_text, required_row, row_get, row_get_json, row_get_optional_json,
 };
 use super::item::{insert_item_query, insert_revision_query};
 use crate::db::Database;
@@ -21,7 +21,7 @@ impl Database {
     ) -> Result<Vec<Finding>, RepositoryError> {
         let rows =
             sqlx::query("SELECT * FROM findings WHERE source_item_id = ? ORDER BY created_at DESC")
-                .bind(item_id)
+                .bind(db_text(item_id))
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db_err)?;
@@ -31,7 +31,7 @@ impl Database {
 
     pub async fn get_finding(&self, finding_id: FindingId) -> Result<Finding, RepositoryError> {
         let row = sqlx::query("SELECT * FROM findings WHERE id = ?")
-            .bind(finding_id)
+            .bind(db_text(finding_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -48,19 +48,19 @@ impl Database {
                 paths, evidence, investigation, triage_state, linked_item_id, triage_note, created_at, triaged_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(finding.id)
-        .bind(finding.project_id)
-        .bind(finding.source_item_id)
-        .bind(finding.source_item_revision_id)
-        .bind(finding.source_job_id)
-        .bind(finding.source_step_id)
+        .bind(db_text(finding.id))
+        .bind(db_text(finding.project_id))
+        .bind(db_text(finding.source_item_id))
+        .bind(db_text(finding.source_item_revision_id))
+        .bind(db_text(finding.source_job_id))
+        .bind(db_text(finding.source_step_id))
         .bind(&finding.source_report_schema_version)
         .bind(&finding.source_finding_key)
-        .bind(finding.source_subject_kind)
-        .bind(finding.source_subject_base_commit_oid.clone())
-        .bind(finding.source_subject_head_commit_oid.clone())
+        .bind(db_text(finding.source_subject_kind))
+        .bind(db_text(&finding.source_subject_base_commit_oid))
+        .bind(db_text(&finding.source_subject_head_commit_oid))
         .bind(&finding.code)
-        .bind(finding.severity)
+        .bind(db_text(finding.severity))
         .bind(&finding.summary)
         .bind(serde_json::to_string(&finding.paths).map_err(json_err)?)
         .bind(serde_json::to_string(&finding.evidence).map_err(json_err)?)
@@ -72,8 +72,8 @@ impl Database {
                 .transpose()
                 .map_err(json_err)?,
         )
-        .bind(finding.triage.state())
-        .bind(finding.triage.linked_item_id())
+        .bind(db_text(finding.triage.state()))
+        .bind(optional_db_text(finding.triage.linked_item_id()))
         .bind(finding.triage.triage_note())
         .bind(finding.created_at)
         .bind(finding.triage.triaged_at())
@@ -92,7 +92,7 @@ impl Database {
         let row = sqlx::query(
             "SELECT * FROM findings WHERE source_job_id = ? AND source_finding_key = ?",
         )
-        .bind(job_id)
+        .bind(db_text(job_id))
         .bind(source_finding_key)
         .fetch_optional(&self.pool)
         .await
@@ -107,11 +107,11 @@ impl Database {
              SET triage_state = ?, triage_note = ?, triaged_at = ?, linked_item_id = ?
              WHERE id = ?",
         )
-        .bind(finding.triage.state())
+        .bind(db_text(finding.triage.state()))
         .bind(finding.triage.triage_note())
         .bind(finding.triage.triaged_at())
-        .bind(finding.triage.linked_item_id())
-        .bind(finding.id)
+        .bind(optional_db_text(finding.triage.linked_item_id()))
+        .bind(db_text(finding.id))
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -131,11 +131,11 @@ impl Database {
              SET triage_state = ?, triage_note = ?, triaged_at = ?, linked_item_id = ?
              WHERE id = ?",
         )
-        .bind(finding.triage.state())
+        .bind(db_text(finding.triage.state()))
         .bind(finding.triage.triage_note())
         .bind(finding.triage.triaged_at())
-        .bind(finding.triage.linked_item_id())
-        .bind(finding.id)
+        .bind(optional_db_text(finding.triage.linked_item_id()))
+        .bind(db_text(finding.id))
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -149,8 +149,8 @@ impl Database {
                    AND origin_finding_id = ?",
             )
             .bind(Utc::now())
-            .bind(detached_item_id)
-            .bind(finding.id)
+            .bind(db_text(detached_item_id))
+            .bind(db_text(finding.id))
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -184,11 +184,11 @@ impl Database {
              SET triage_state = ?, linked_item_id = ?, triage_note = ?, triaged_at = ?
              WHERE id = ?",
         )
-        .bind(finding.triage.state())
-        .bind(linked_item.id)
+        .bind(db_text(finding.triage.state()))
+        .bind(db_text(linked_item.id))
         .bind(finding.triage.triage_note())
         .bind(finding.triage.triaged_at())
-        .bind(finding.id)
+        .bind(db_text(finding.id))
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -202,8 +202,8 @@ impl Database {
                    AND origin_finding_id = ?",
             )
             .bind(Utc::now())
-            .bind(detached_item_id)
-            .bind(finding.id)
+            .bind(db_text(detached_item_id))
+            .bind(db_text(finding.id))
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -222,13 +222,13 @@ impl Database {
                  triage_state = ?, linked_item_id = ?, triage_note = ?, triaged_at = ?
              WHERE id = ?",
         )
-        .bind(finding.source_step_id)
+        .bind(db_text(finding.source_step_id))
         .bind(&finding.source_report_schema_version)
-        .bind(finding.source_subject_kind)
-        .bind(finding.source_subject_base_commit_oid.clone())
-        .bind(finding.source_subject_head_commit_oid.clone())
+        .bind(db_text(finding.source_subject_kind))
+        .bind(db_text(&finding.source_subject_base_commit_oid))
+        .bind(db_text(&finding.source_subject_head_commit_oid))
         .bind(&finding.code)
-        .bind(finding.severity)
+        .bind(db_text(finding.severity))
         .bind(&finding.summary)
         .bind(serde_json::to_string(&finding.paths).map_err(json_err)?)
         .bind(serde_json::to_string(&finding.evidence).map_err(json_err)?)
@@ -240,11 +240,11 @@ impl Database {
                 .transpose()
                 .map_err(json_err)?,
         )
-        .bind(finding.triage.state())
-        .bind(finding.triage.linked_item_id())
+        .bind(db_text(finding.triage.state()))
+        .bind(optional_db_text(finding.triage.linked_item_id()))
         .bind(finding.triage.triage_note())
         .bind(finding.triage.triaged_at())
-        .bind(finding.id)
+        .bind(db_text(finding.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -321,19 +321,19 @@ pub(super) async fn upsert_finding(
             evidence = excluded.evidence,
             investigation = excluded.investigation",
     )
-    .bind(finding.id)
-    .bind(finding.project_id)
-    .bind(finding.source_item_id)
-    .bind(finding.source_item_revision_id)
-    .bind(finding.source_job_id)
-    .bind(finding.source_step_id)
+    .bind(db_text(finding.id))
+    .bind(db_text(finding.project_id))
+    .bind(db_text(finding.source_item_id))
+    .bind(db_text(finding.source_item_revision_id))
+    .bind(db_text(finding.source_job_id))
+    .bind(db_text(finding.source_step_id))
     .bind(&finding.source_report_schema_version)
     .bind(&finding.source_finding_key)
-    .bind(finding.source_subject_kind)
-    .bind(finding.source_subject_base_commit_oid.clone())
-    .bind(finding.source_subject_head_commit_oid.clone())
+    .bind(db_text(finding.source_subject_kind))
+    .bind(db_text(&finding.source_subject_base_commit_oid))
+    .bind(db_text(&finding.source_subject_head_commit_oid))
     .bind(&finding.code)
-    .bind(finding.severity)
+    .bind(db_text(finding.severity))
     .bind(&finding.summary)
     .bind(serde_json::to_string(&finding.paths).map_err(json_err)?)
     .bind(serde_json::to_string(&finding.evidence).map_err(json_err)?)
@@ -345,8 +345,8 @@ pub(super) async fn upsert_finding(
             .transpose()
             .map_err(json_err)?,
     )
-    .bind(finding.triage.state())
-    .bind(finding.triage.linked_item_id())
+    .bind(db_text(finding.triage.state()))
+    .bind(optional_db_text(finding.triage.linked_item_id()))
     .bind(finding.triage.triage_note())
     .bind(finding.created_at)
     .bind(finding.triage.triaged_at())

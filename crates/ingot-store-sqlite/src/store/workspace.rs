@@ -6,7 +6,8 @@ use ingot_domain::workspace::{Workspace, WorkspaceCommitState, WorkspaceState, W
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+    db_err, db_text, db_write_err, ensure_rows_affected, map_optional_row, optional_db_text,
+    required_row, row_get,
 };
 use crate::db::Database;
 
@@ -16,7 +17,7 @@ impl Database {
         workspace_id: WorkspaceId,
     ) -> Result<Workspace, RepositoryError> {
         let row = sqlx::query("SELECT * FROM workspaces WHERE id = ?")
-            .bind(workspace_id)
+            .bind(db_text(workspace_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -32,20 +33,20 @@ impl Database {
                 status, current_job_id, created_at, updated_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(workspace.id)
-        .bind(workspace.project_id)
-        .bind(workspace.kind)
-        .bind(workspace.strategy)
+        .bind(db_text(workspace.id))
+        .bind(db_text(workspace.project_id))
+        .bind(db_text(workspace.kind))
+        .bind(db_text(workspace.strategy))
         .bind(workspace.path.to_string_lossy().as_ref())
-        .bind(workspace.created_for_revision_id)
-        .bind(workspace.parent_workspace_id)
-        .bind(workspace.target_ref.clone())
-        .bind(workspace.workspace_ref.clone())
-        .bind(workspace.state.base_commit_oid().cloned())
-        .bind(workspace.state.head_commit_oid().cloned())
-        .bind(workspace.retention_policy)
-        .bind(workspace.state.status())
-        .bind(workspace.state.current_job_id())
+        .bind(optional_db_text(workspace.created_for_revision_id))
+        .bind(optional_db_text(workspace.parent_workspace_id))
+        .bind(optional_db_text(workspace.target_ref.as_ref()))
+        .bind(optional_db_text(workspace.workspace_ref.as_ref()))
+        .bind(optional_db_text(workspace.state.base_commit_oid().cloned()))
+        .bind(optional_db_text(workspace.state.head_commit_oid().cloned()))
+        .bind(db_text(workspace.retention_policy))
+        .bind(db_text(workspace.state.status()))
+        .bind(optional_db_text(workspace.state.current_job_id()))
         .bind(workspace.created_at)
         .bind(workspace.updated_at)
         .execute(&self.pool)
@@ -63,15 +64,15 @@ impl Database {
              WHERE id = ?",
         )
         .bind(workspace.path.to_string_lossy().as_ref())
-        .bind(workspace.target_ref.clone())
-        .bind(workspace.workspace_ref.clone())
-        .bind(workspace.state.base_commit_oid().cloned())
-        .bind(workspace.state.head_commit_oid().cloned())
-        .bind(workspace.retention_policy)
-        .bind(workspace.state.status())
-        .bind(workspace.state.current_job_id())
+        .bind(optional_db_text(workspace.target_ref.as_ref()))
+        .bind(optional_db_text(workspace.workspace_ref.as_ref()))
+        .bind(optional_db_text(workspace.state.base_commit_oid().cloned()))
+        .bind(optional_db_text(workspace.state.head_commit_oid().cloned()))
+        .bind(db_text(workspace.retention_policy))
+        .bind(db_text(workspace.state.status()))
+        .bind(optional_db_text(workspace.state.current_job_id()))
         .bind(workspace.updated_at)
-        .bind(workspace.id)
+        .bind(db_text(workspace.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -91,7 +92,7 @@ impl Database {
              ORDER BY created_at DESC
              LIMIT 1",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -110,7 +111,7 @@ impl Database {
              WHERE r.item_id = ?
              ORDER BY w.created_at DESC",
         )
-        .bind(item_id)
+        .bind(db_text(item_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -128,7 +129,7 @@ impl Database {
              WHERE project_id = ?
              ORDER BY created_at DESC",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -138,7 +139,7 @@ impl Database {
 
     pub async fn delete_workspace(&self, workspace_id: WorkspaceId) -> Result<(), RepositoryError> {
         let result = sqlx::query("DELETE FROM workspaces WHERE id = ?")
-            .bind(workspace_id)
+            .bind(db_text(workspace_id))
             .execute(&self.pool)
             .await
             .map_err(db_write_err)?;

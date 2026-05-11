@@ -4,12 +4,12 @@ use ingot_domain::ports::RepositoryError;
 
 use super::mapping::map_job;
 use crate::db::Database;
-use crate::store::helpers::{db_err, map_optional_row, required_row};
+use crate::store::helpers::{db_err, db_text, map_optional_row, required_row};
 
 impl Database {
     pub async fn list_jobs_by_item(&self, item_id: ItemId) -> Result<Vec<Job>, RepositoryError> {
         let rows = sqlx::query("SELECT * FROM jobs WHERE item_id = ? ORDER BY created_at DESC")
-            .bind(item_id)
+            .bind(db_text(item_id))
             .fetch_all(&self.pool)
             .await
             .map_err(db_err)?;
@@ -43,7 +43,7 @@ impl Database {
              WHERE project_id = ?
              ORDER BY created_at DESC",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -67,7 +67,7 @@ impl Database {
 
     pub async fn get_job(&self, job_id: JobId) -> Result<Job, RepositoryError> {
         let row = sqlx::query("SELECT * FROM jobs WHERE id = ?")
-            .bind(job_id)
+            .bind(db_text(job_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -81,7 +81,7 @@ impl Database {
     ) -> Result<Vec<Job>, RepositoryError> {
         let rows =
             sqlx::query("SELECT * FROM jobs WHERE item_revision_id = ? ORDER BY created_at DESC")
-                .bind(revision_id)
+                .bind(db_text(revision_id))
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db_err)?;
@@ -101,7 +101,7 @@ impl Database {
              ORDER BY created_at DESC
              LIMIT 1",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;

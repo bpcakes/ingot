@@ -8,12 +8,11 @@ use ingot_domain::git_operation::{
 };
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{GitOperationId, ProjectId};
-use ingot_domain::ports::WorkspaceRepository;
+use ingot_domain::ports::{ActivityRepository, GitOperationRepository, WorkspaceRepository};
 use ingot_domain::workspace::{Workspace, WorkspaceKind, WorkspaceStatus};
 
 use crate::UseCaseError;
 use crate::git_operation_journal::{create_planned, mark_applied};
-use crate::store::WorkspaceCommandStore;
 
 pub async fn abandon_workspace<S: WorkspaceRepository>(
     store: &S,
@@ -84,7 +83,7 @@ pub async fn reset_workspace<S, G>(
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError>
 where
-    S: WorkspaceCommandStore,
+    S: WorkspaceRepository + GitOperationRepository + ActivityRepository,
     G: WorkspaceInfraPort,
 {
     let expected_head = workspace
@@ -138,7 +137,7 @@ pub async fn remove_workspace_full<S, G>(
     workspace: &Workspace,
 ) -> Result<Workspace, UseCaseError>
 where
-    S: WorkspaceCommandStore,
+    S: WorkspaceRepository + GitOperationRepository + ActivityRepository,
     G: WorkspaceInfraPort,
 {
     let workspace = plan_workspace_removal(store, workspace).await?;

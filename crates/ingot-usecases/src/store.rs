@@ -6,11 +6,10 @@ use ingot_domain::git_operation::GitOperation;
 use ingot_domain::ids::{ItemId, ItemRevisionId, WorkspaceId};
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ActivityRepository, ConvergenceQueueRepository, ConvergenceRepository, FinalizationRepository,
-    FindingRepository, GitOperationRepository, InvalidatePreparedConvergenceRepository,
-    ItemRepository, JobRepository, ProjectRepository, RepositoryError, RevisionContextRepository,
-    RevisionLaneTeardownMutation, RevisionLaneTeardownRepository, RevisionRepository,
-    WorkspaceRepository,
+    ActivityRepository, ConvergenceQueueRepository, ConvergenceRepository, FindingRepository,
+    GitOperationRepository, ItemRepository, JobRepository, ProjectRepository, RepositoryError,
+    RevisionContextRepository, RevisionLaneTeardownMutation, RevisionLaneTeardownRepository,
+    RevisionRepository, WorkspaceRepository,
 };
 use ingot_domain::workspace::Workspace;
 
@@ -70,20 +69,7 @@ pub trait DispatchStore:
 {
 }
 
-pub trait InvestigationRefStore: GitOperationRepository + ActivityRepository {}
-
-pub trait DispatchCleanupStore: WorkspaceRepository + GitOperationRepository {}
-
 pub trait AutoDispatchStore: JobRepository + WorkspaceRepository + ActivityRepository {}
-
-pub trait FindingCleanupStore:
-    FindingRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-pub trait CreateItemStore: ProjectRepository + ItemRepository + ActivityRepository {}
-
-pub trait UpdateItemStore: ProjectRepository + ItemRepository + ActivityRepository {}
 
 pub trait ItemRevisionMutationStore:
     ProjectRepository
@@ -124,7 +110,7 @@ pub trait ApplyFindingTriageStore:
     + FindingRepository
     + ActivityRepository
     + ProjectedReviewDispatchStore
-    + FindingCleanupStore
+    + GitOperationRepository
 {
 }
 
@@ -140,11 +126,6 @@ pub trait BatchPromoteFindingsStore:
 {
 }
 
-pub trait AutoTriageStore:
-    FindingRepository + RevisionRepository + ItemRepository + ActivityRepository
-{
-}
-
 pub trait JobWorkflowStore:
     JobRepository
     + ItemRepository
@@ -153,23 +134,6 @@ pub trait JobWorkflowStore:
     + ApplicationJobContextStore
     + ItemRuntimeSnapshotStore
     + AutoDispatchStore
-{
-}
-
-pub trait WorkspaceCommandStore:
-    WorkspaceRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-pub trait ConvergenceQueuePromotionStore: ConvergenceQueueRepository + ActivityRepository {}
-
-pub trait PreparedConvergenceInvalidationStore:
-    WorkspaceRepository + InvalidatePreparedConvergenceRepository
-{
-}
-
-pub trait FinalizeOperationStore:
-    GitOperationRepository + ActivityRepository + FinalizationRepository
 {
 }
 
@@ -253,20 +217,7 @@ impl<T> DispatchStore for T where
 {
 }
 
-impl<T> InvestigationRefStore for T where T: GitOperationRepository + ActivityRepository {}
-
-impl<T> DispatchCleanupStore for T where T: WorkspaceRepository + GitOperationRepository {}
-
 impl<T> AutoDispatchStore for T where T: JobRepository + WorkspaceRepository + ActivityRepository {}
-
-impl<T> FindingCleanupStore for T where
-    T: FindingRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-impl<T> CreateItemStore for T where T: ProjectRepository + ItemRepository + ActivityRepository {}
-
-impl<T> UpdateItemStore for T where T: ProjectRepository + ItemRepository + ActivityRepository {}
 
 impl<T> ItemRevisionMutationStore for T where
     T: ProjectRepository
@@ -307,7 +258,7 @@ impl<T> ApplyFindingTriageStore for T where
         + FindingRepository
         + ActivityRepository
         + ProjectedReviewDispatchStore
-        + FindingCleanupStore
+        + GitOperationRepository
 {
 }
 
@@ -323,11 +274,6 @@ impl<T> BatchPromoteFindingsStore for T where
 {
 }
 
-impl<T> AutoTriageStore for T where
-    T: FindingRepository + RevisionRepository + ItemRepository + ActivityRepository
-{
-}
-
 impl<T> JobWorkflowStore for T where
     T: JobRepository
         + ItemRepository
@@ -336,23 +282,5 @@ impl<T> JobWorkflowStore for T where
         + ApplicationJobContextStore
         + ItemRuntimeSnapshotStore
         + AutoDispatchStore
-{
-}
-
-impl<T> WorkspaceCommandStore for T where
-    T: WorkspaceRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-impl<T> ConvergenceQueuePromotionStore for T where T: ConvergenceQueueRepository + ActivityRepository
-{}
-
-impl<T> PreparedConvergenceInvalidationStore for T where
-    T: WorkspaceRepository + InvalidatePreparedConvergenceRepository
-{
-}
-
-impl<T> FinalizeOperationStore for T where
-    T: GitOperationRepository + ActivityRepository + FinalizationRepository
 {
 }

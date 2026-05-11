@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::git_ref::GitRef;
 use crate::ids::{ConvergenceQueueEntryId, ItemId, ItemRevisionId, ProjectId};
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum ConvergenceQueueEntryStatus {
     Queued,
     Head,

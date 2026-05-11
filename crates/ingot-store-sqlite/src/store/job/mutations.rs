@@ -11,7 +11,10 @@ use super::ClaimQueuedAgentJobExecutionParams;
 use super::conflict::classify_job_conflict;
 use super::mapping::encode_job_input;
 use crate::db::Database;
-use crate::store::helpers::{db_err, db_write_err, ensure_rows_affected, serialize_optional_json};
+use crate::store::helpers::{
+    db_err, db_text, db_write_err, ensure_rows_affected, optional_db_text, serialize_optional_json,
+};
+use crate::store::item::escalation_state;
 
 impl Database {
     pub async fn start_job_execution(
@@ -48,17 +51,17 @@ impl Database {
                      AND current_revision_id = ?
                )",
         )
-        .bind(workspace_id)
-        .bind(agent_id)
+        .bind(optional_db_text(workspace_id))
+        .bind(optional_db_text(agent_id))
         .bind(process_pid.map(i64::from))
-        .bind(lease_owner_id)
+        .bind(db_text(lease_owner_id))
         .bind(Utc::now())
         .bind(lease_expires_at)
         .bind(Utc::now())
-        .bind(job_id)
-        .bind(workspace_id)
-        .bind(item_id)
-        .bind(expected_item_revision_id)
+        .bind(db_text(job_id))
+        .bind(optional_db_text(workspace_id))
+        .bind(db_text(item_id))
+        .bind(db_text(expected_item_revision_id))
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -113,17 +116,17 @@ impl Database {
                      AND current_revision_id = ?
                )",
         )
-        .bind(assignment.workspace_id)
-        .bind(assignment.agent_id)
+        .bind(db_text(assignment.workspace_id))
+        .bind(db_text(assignment.agent_id))
         .bind(assignment.prompt_snapshot)
         .bind(assignment.phase_template_digest)
-        .bind(lease_owner_id)
+        .bind(db_text(lease_owner_id))
         .bind(now)
         .bind(lease_expires_at)
         .bind(now)
-        .bind(job_id)
-        .bind(item_id)
-        .bind(expected_item_revision_id)
+        .bind(db_text(job_id))
+        .bind(db_text(item_id))
+        .bind(db_text(expected_item_revision_id))
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -167,10 +170,10 @@ impl Database {
         )
         .bind(Utc::now())
         .bind(lease_expires_at)
-        .bind(job_id)
-        .bind(lease_owner_id)
-        .bind(item_id)
-        .bind(expected_item_revision_id)
+        .bind(db_text(job_id))
+        .bind(db_text(lease_owner_id))
+        .bind(db_text(item_id))
+        .bind(db_text(expected_item_revision_id))
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -206,34 +209,34 @@ impl Database {
                 error_message, created_at, started_at, ended_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(job.id)
-        .bind(job.project_id)
-        .bind(job.item_id)
-        .bind(job.item_revision_id)
-        .bind(job.step_id)
+        .bind(db_text(job.id))
+        .bind(db_text(job.project_id))
+        .bind(db_text(job.item_id))
+        .bind(db_text(job.item_revision_id))
+        .bind(db_text(job.step_id))
         .bind(job.semantic_attempt_no as i64)
         .bind(job.retry_no as i64)
-        .bind(job.supersedes_job_id)
-        .bind(status)
-        .bind(job.state.outcome_class())
-        .bind(job.phase_kind)
-        .bind(job.state.workspace_id())
-        .bind(job.workspace_kind)
-        .bind(job.execution_permission)
-        .bind(job.context_policy)
+        .bind(optional_db_text(job.supersedes_job_id))
+        .bind(db_text(status))
+        .bind(optional_db_text(job.state.outcome_class()))
+        .bind(db_text(job.phase_kind))
+        .bind(optional_db_text(job.state.workspace_id()))
+        .bind(db_text(job.workspace_kind))
+        .bind(db_text(job.execution_permission))
+        .bind(db_text(job.context_policy))
         .bind(&job.phase_template_slug)
         .bind(job.state.phase_template_digest())
         .bind(job.state.prompt_snapshot())
         .bind(job_input_kind)
-        .bind(input_base_commit_oid)
-        .bind(input_head_commit_oid)
-        .bind(job.output_artifact_kind)
-        .bind(job.state.output_commit_oid().cloned())
+        .bind(optional_db_text(input_base_commit_oid))
+        .bind(optional_db_text(input_head_commit_oid))
+        .bind(db_text(job.output_artifact_kind))
+        .bind(optional_db_text(job.state.output_commit_oid().cloned()))
         .bind(job.state.result_schema_version())
         .bind(serialize_optional_json(job.state.result_payload())?)
-        .bind(job.state.agent_id())
+        .bind(optional_db_text(job.state.agent_id()))
         .bind(job.state.process_pid().map(i64::from))
-        .bind(job.state.lease_owner_id())
+        .bind(optional_db_text(job.state.lease_owner_id()))
         .bind(job.state.heartbeat_at())
         .bind(job.state.lease_expires_at())
         .bind(job.state.error_code())
@@ -265,30 +268,30 @@ impl Database {
                  created_at = ?, started_at = ?, ended_at = ?
              WHERE id = ?",
         )
-        .bind(job.step_id)
+        .bind(db_text(job.step_id))
         .bind(job.semantic_attempt_no as i64)
         .bind(job.retry_no as i64)
-        .bind(job.supersedes_job_id)
-        .bind(status)
-        .bind(job.state.outcome_class())
-        .bind(job.phase_kind)
-        .bind(job.state.workspace_id())
-        .bind(job.workspace_kind)
-        .bind(job.execution_permission)
-        .bind(job.context_policy)
+        .bind(optional_db_text(job.supersedes_job_id))
+        .bind(db_text(status))
+        .bind(optional_db_text(job.state.outcome_class()))
+        .bind(db_text(job.phase_kind))
+        .bind(optional_db_text(job.state.workspace_id()))
+        .bind(db_text(job.workspace_kind))
+        .bind(db_text(job.execution_permission))
+        .bind(db_text(job.context_policy))
         .bind(&job.phase_template_slug)
         .bind(job.state.phase_template_digest())
         .bind(job.state.prompt_snapshot())
         .bind(job_input_kind)
-        .bind(input_base_commit_oid)
-        .bind(input_head_commit_oid)
-        .bind(job.output_artifact_kind)
-        .bind(job.state.output_commit_oid().cloned())
+        .bind(optional_db_text(input_base_commit_oid))
+        .bind(optional_db_text(input_head_commit_oid))
+        .bind(db_text(job.output_artifact_kind))
+        .bind(optional_db_text(job.state.output_commit_oid().cloned()))
         .bind(job.state.result_schema_version())
         .bind(serialize_optional_json(job.state.result_payload())?)
-        .bind(job.state.agent_id())
+        .bind(optional_db_text(job.state.agent_id()))
         .bind(job.state.process_pid().map(i64::from))
-        .bind(job.state.lease_owner_id())
+        .bind(optional_db_text(job.state.lease_owner_id()))
         .bind(job.state.heartbeat_at())
         .bind(job.state.lease_expires_at())
         .bind(job.state.error_code())
@@ -296,7 +299,7 @@ impl Database {
         .bind(job.created_at)
         .bind(job.state.started_at())
         .bind(job.state.ended_at())
-        .bind(job.id)
+        .bind(db_text(job.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -339,14 +342,14 @@ impl Database {
                      AND current_revision_id = ?
                )",
         )
-        .bind(status)
-        .bind(outcome_class)
+        .bind(db_text(status))
+        .bind(optional_db_text(outcome_class))
         .bind(error_code)
         .bind(error_message)
         .bind(Utc::now())
-        .bind(job_id)
-        .bind(item_id)
-        .bind(expected_item_revision_id)
+        .bind(db_text(job_id))
+        .bind(db_text(item_id))
+        .bind(db_text(expected_item_revision_id))
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -370,16 +373,13 @@ impl Database {
                  WHERE id = ?
                    AND current_revision_id = ?",
             )
-            .bind(
-                Escalation::OperatorRequired {
-                    reason: escalation_reason,
-                }
-                .as_db_str(),
-            )
-            .bind(escalation_reason)
+            .bind(escalation_state(&Escalation::OperatorRequired {
+                reason: escalation_reason,
+            }))
+            .bind(db_text(escalation_reason))
             .bind(Utc::now())
-            .bind(item_id)
-            .bind(expected_item_revision_id)
+            .bind(db_text(item_id))
+            .bind(db_text(expected_item_revision_id))
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -396,7 +396,7 @@ impl Database {
 
     pub async fn delete_job(&self, job_id: JobId) -> Result<(), RepositoryError> {
         let result = sqlx::query("DELETE FROM jobs WHERE id = ?")
-            .bind(job_id)
+            .bind(db_text(job_id))
             .execute(&self.pool)
             .await
             .map_err(db_write_err)?;

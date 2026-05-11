@@ -5,13 +5,14 @@ use axum::{Json, Router};
 use ingot_domain::job::Job;
 use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_usecases::UseCaseError;
+use ingot_usecases::application::ItemRuntimeSnapshot;
 use ingot_usecases::dispatch::{DispatchActivityContext, prepare_and_persist_dispatched_job};
 use ingot_usecases::job::{DispatchJobCommand, dispatch_job, retry_job};
 
 use crate::error::ApiError;
 
 use super::app::AppState;
-use super::item_projection::{ItemRuntimeSnapshot, load_item_runtime_snapshot};
+use super::item_projection::load_item_runtime_snapshot;
 use super::support::{
     errors::{repo_to_item, repo_to_project},
     path::ApiPath,

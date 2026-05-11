@@ -34,10 +34,10 @@ async fn get_job_rejects_assigned_rows_without_workspace_id() {
             error_message, created_at, started_at, ended_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(job_id)
-    .bind(project.id)
-    .bind(item.id)
-    .bind(revision.id)
+    .bind(job_id.to_string())
+    .bind(project.id.to_string())
+    .bind(item.id.to_string())
+    .bind(revision.id.to_string())
     .bind("author_initial")
     .bind(1_i64)
     .bind(0_i64)

@@ -6,7 +6,8 @@ use ingot_domain::ports::{AgentRepository, RepositoryError};
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, required_row, row_get, row_get_json, serialize_json,
+    db_err, db_text, db_write_err, ensure_rows_affected, required_row, row_get, row_get_json,
+    serialize_json,
 };
 use crate::db::Database;
 
@@ -32,7 +33,7 @@ impl Database {
              FROM agents
              WHERE id = ?",
         )
-        .bind(agent_id)
+        .bind(db_text(agent_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -47,16 +48,16 @@ impl Database {
                 health_check, status
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(agent.id)
+        .bind(db_text(agent.id))
         .bind(&agent.slug)
         .bind(&agent.name)
-        .bind(agent.adapter_kind)
-        .bind(agent.provider)
-        .bind(&agent.model)
+        .bind(db_text(agent.adapter_kind))
+        .bind(db_text(agent.provider))
+        .bind(db_text(&agent.model))
         .bind(agent.cli_path.to_string_lossy().as_ref())
         .bind(serialize_json(&agent.capabilities)?)
         .bind(agent.health_check.as_deref())
-        .bind(agent.status)
+        .bind(db_text(agent.status))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -73,14 +74,14 @@ impl Database {
         )
         .bind(&agent.slug)
         .bind(&agent.name)
-        .bind(agent.adapter_kind)
-        .bind(agent.provider)
-        .bind(&agent.model)
+        .bind(db_text(agent.adapter_kind))
+        .bind(db_text(agent.provider))
+        .bind(db_text(&agent.model))
         .bind(agent.cli_path.to_string_lossy().as_ref())
         .bind(serialize_json(&agent.capabilities)?)
         .bind(agent.health_check.as_deref())
-        .bind(agent.status)
-        .bind(agent.id)
+        .bind(db_text(agent.status))
+        .bind(db_text(agent.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -90,7 +91,7 @@ impl Database {
 
     pub async fn delete_agent(&self, agent_id: AgentId) -> Result<(), RepositoryError> {
         let result = sqlx::query("DELETE FROM agents WHERE id = ?")
-            .bind(agent_id)
+            .bind(db_text(agent_id))
             .execute(&self.pool)
             .await
             .map_err(db_write_err)?;

@@ -7,7 +7,8 @@ use ingot_domain::ports::{ConvergenceRepository, RepositoryError};
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+    db_err, db_text, db_write_err, ensure_rows_affected, map_optional_row, optional_db_text,
+    required_row, row_get,
 };
 use crate::db::Database;
 
@@ -18,7 +19,7 @@ impl Database {
     ) -> Result<Vec<Convergence>, RepositoryError> {
         let rows =
             sqlx::query("SELECT * FROM convergences WHERE item_id = ? ORDER BY created_at DESC")
-                .bind(item_id)
+                .bind(db_text(item_id))
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db_err)?;
@@ -31,7 +32,7 @@ impl Database {
         convergence_id: ConvergenceId,
     ) -> Result<Convergence, RepositoryError> {
         let row = sqlx::query("SELECT * FROM convergences WHERE id = ?")
-            .bind(convergence_id)
+            .bind(db_text(convergence_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -68,20 +69,20 @@ impl Database {
                 conflict_summary, created_at, completed_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(convergence.id)
-        .bind(convergence.project_id)
-        .bind(convergence.item_id)
-        .bind(convergence.item_revision_id)
-        .bind(convergence.source_workspace_id)
-        .bind(state.integration_workspace_id())
-        .bind(convergence.source_head_commit_oid.clone())
-        .bind(&convergence.target_ref)
-        .bind(convergence.strategy)
-        .bind(state.status())
-        .bind(state.input_target_commit_oid().cloned())
-        .bind(state.prepared_commit_oid().cloned())
-        .bind(state.final_target_commit_oid().cloned())
-        .bind(state.checkout_adoption_state())
+        .bind(db_text(convergence.id))
+        .bind(db_text(convergence.project_id))
+        .bind(db_text(convergence.item_id))
+        .bind(db_text(convergence.item_revision_id))
+        .bind(db_text(convergence.source_workspace_id))
+        .bind(optional_db_text(state.integration_workspace_id()))
+        .bind(db_text(&convergence.source_head_commit_oid))
+        .bind(db_text(&convergence.target_ref))
+        .bind(db_text(convergence.strategy))
+        .bind(db_text(state.status()))
+        .bind(optional_db_text(state.input_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.prepared_commit_oid().cloned()))
+        .bind(optional_db_text(state.final_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.checkout_adoption_state()))
         .bind(state.checkout_adoption_message())
         .bind(state.checkout_adoption_updated_at())
         .bind(state.checkout_adoption_synced_at())
@@ -110,21 +111,21 @@ impl Database {
                  conflict_summary = ?, completed_at = ?
              WHERE id = ?",
         )
-        .bind(state.integration_workspace_id())
-        .bind(convergence.source_head_commit_oid.clone())
-        .bind(&convergence.target_ref)
-        .bind(convergence.strategy)
-        .bind(state.status())
-        .bind(state.input_target_commit_oid().cloned())
-        .bind(state.prepared_commit_oid().cloned())
-        .bind(state.final_target_commit_oid().cloned())
-        .bind(state.checkout_adoption_state())
+        .bind(optional_db_text(state.integration_workspace_id()))
+        .bind(db_text(&convergence.source_head_commit_oid))
+        .bind(db_text(&convergence.target_ref))
+        .bind(db_text(convergence.strategy))
+        .bind(db_text(state.status()))
+        .bind(optional_db_text(state.input_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.prepared_commit_oid().cloned()))
+        .bind(optional_db_text(state.final_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.checkout_adoption_state()))
         .bind(state.checkout_adoption_message())
         .bind(state.checkout_adoption_updated_at())
         .bind(state.checkout_adoption_synced_at())
         .bind(state.conflict_summary())
         .bind(state.completed_at())
-        .bind(convergence.id)
+        .bind(db_text(convergence.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -139,7 +140,7 @@ impl Database {
         let rows = sqlx::query(
             "SELECT * FROM convergences WHERE item_revision_id = ? ORDER BY created_at DESC",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -159,7 +160,7 @@ impl Database {
              ORDER BY created_at DESC
              LIMIT 1",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -179,7 +180,7 @@ impl Database {
              ORDER BY created_at DESC
              LIMIT 1",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;

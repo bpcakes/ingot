@@ -8,10 +8,8 @@ use crate::git_ref::{GitRef, TargetRefParseError};
 /// Newtype for bare branch names (e.g. `main`, `feature/foo`), distinct from
 /// full Git refs like `refs/heads/main`.  Use [`BranchName::to_git_ref`] to
 /// obtain the corresponding [`GitRef`].
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[cfg_attr(feature = "sqlx", sqlx(transparent))]
 pub struct BranchName(String);
 
 impl BranchName {

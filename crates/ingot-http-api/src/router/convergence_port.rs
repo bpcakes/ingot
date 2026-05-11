@@ -8,21 +8,21 @@ use ingot_domain::item::Item;
 use ingot_domain::ports::FinalizationMutation;
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
-use ingot_domain::workspace::WorkspaceStatus;
 use ingot_git::commands::FinalizeTargetRefOutcome;
 use ingot_git::project_repo::CheckoutFinalizationStatus;
 use ingot_usecases::UseCaseError;
+use ingot_usecases::application::{
+    ItemRuntimeSnapshot, hydrate_convergence_validity, load_item_runtime_snapshot,
+};
 use ingot_usecases::convergence::{
     CheckoutFinalizationReadiness, ConvergenceCommandPort, ConvergenceQueuePrepareContext,
-    FinalizeTargetRefResult, PreparedConvergenceFinalizePort, build_convergence_approval_context,
+    FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
+    apply_finalization_mutation_and_load_cleanup, build_convergence_approval_context,
     build_reject_approval_context,
 };
 use tracing::warn;
 
 use super::app::{AppState, teardown_revision_lane_state};
-use super::item_projection::{
-    ItemRuntimeSnapshot, hydrate_convergence_validity, load_item_runtime_snapshot,
-};
 use super::support::errors::{repo_to_item_usecase, repo_to_project_usecase};
 
 #[derive(Clone)]
@@ -62,7 +62,7 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 jobs,
                 findings,
                 convergences,
-            } = load_item_runtime_snapshot(&state, project.id, &item).await?;
+            } = load_item_runtime_snapshot(&state.db, &state.infra(), project.id, &item).await?;
             let active_queue_entry = state
                 .db
                 .find_active_queue_entry_for_revision(current_revision.id)
@@ -167,16 +167,12 @@ impl ConvergenceCommandPort for HttpConvergencePort {
                 .list_jobs_by_item(item.id)
                 .await
                 .map_err(UseCaseError::Repository)?;
-            let convergences = hydrate_convergence_validity(
-                &state,
-                project.id,
-                state
-                    .db
-                    .list_convergences_by_item(item.id)
-                    .await
-                    .map_err(UseCaseError::Repository)?,
-            )
-            .await?;
+            let mut convergences = state
+                .db
+                .list_convergences_by_item(item.id)
+                .await
+                .map_err(UseCaseError::Repository)?;
+            hydrate_convergence_validity(&state.infra(), project.id, &mut convergences).await?;
             let queue_entry = state
                 .db
                 .find_active_queue_entry_for_revision(revision.id)
@@ -428,49 +424,17 @@ impl PreparedConvergenceFinalizePort for HttpConvergencePort {
     ) -> impl std::future::Future<Output = Result<(), UseCaseError>> + Send {
         let state = self.state.clone();
         async move {
-            let cleanup = match &mutation {
-                FinalizationMutation::TargetRefAdvanced(mutation) => {
-                    Some((mutation.project_id, mutation.convergence_id))
-                }
-                FinalizationMutation::CheckoutAdoptionSucceeded(_) => None,
-            };
-            state
-                .db
-                .apply_finalization_mutation(mutation)
-                .await
-                .map_err(UseCaseError::Repository)?;
-
-            if let Some((project_id, convergence_id)) = cleanup {
-                let cleanup_result: Result<(), String> = async {
-                    let convergence = state
-                        .db
-                        .get_convergence(convergence_id)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    let Some(workspace_id) = convergence.state.integration_workspace_id() else {
-                        return Ok(());
-                    };
-                    let workspace = state
-                        .db
-                        .get_workspace(workspace_id)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    if workspace.state.status() != WorkspaceStatus::Abandoned {
-                        return Ok(());
-                    }
-                    state
-                        .infra()
-                        .remove_workspace_path(project_id, &workspace.path)
-                        .await
-                        .map_err(|error| format!("{error:?}"))
-                }
-                .await;
-
-                if let Err(error) = cleanup_result {
+            let cleanup = apply_finalization_mutation_and_load_cleanup(&state.db, mutation).await?;
+            if let Some(cleanup) = cleanup {
+                if let Err(error) = state
+                    .infra()
+                    .remove_workspace_path(cleanup.project_id, &cleanup.workspace_path)
+                    .await
+                {
                     warn!(
-                        project_id = %project_id,
-                        convergence_id = %convergence_id,
-                        error = %error,
+                        project_id = %cleanup.project_id,
+                        convergence_id = %cleanup.convergence_id,
+                        ?error,
                         "failed best-effort integration workspace cleanup after committed finalization",
                     );
                 }

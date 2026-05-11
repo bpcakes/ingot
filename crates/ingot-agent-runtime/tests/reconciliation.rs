@@ -10,8 +10,8 @@ use ingot_domain::git_operation::{GitOperationEntityRef, GitOperationStatus, Ope
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::item::{ApprovalState, DoneReason, Escalation, ResolutionSource};
 use ingot_domain::job::{
-    ContextPolicy, ExecutionPermission, JobInput, JobStatus, OutcomeClass, OutputArtifactKind,
-    PhaseKind,
+    ContextPolicy, ExecutionPermission, JobAssignment, JobInput, JobState, JobStatus, OutcomeClass,
+    OutputArtifactKind, PhaseKind,
 };
 use ingot_domain::step_id::StepId;
 use ingot_domain::test_support::GitOperationBuilder;
@@ -410,6 +410,98 @@ async fn reconcile_active_jobs_does_not_repair_daemon_validation_assigned_handof
         updated_workspace.state.current_job_id(),
         Some(assigned_job.id)
     );
+}
+
+#[tokio::test]
+async fn reconcile_startup_expires_lease_free_daemon_validation_jobs() {
+    let h = TestHarness::new(Arc::new(FakeRunner)).await;
+
+    let item_id = ingot_domain::ids::ItemId::new();
+    let revision_id = ingot_domain::ids::ItemRevisionId::new();
+    let seed_commit = head_oid(&h.repo_path)
+        .await
+        .expect("seed head")
+        .into_inner();
+
+    let item = ItemBuilder::new(h.project.id, revision_id)
+        .id(item_id)
+        .build();
+    let revision = RevisionBuilder::new(item_id)
+        .id(revision_id)
+        .explicit_seed(seed_commit.as_str())
+        .build();
+    h.db.create_item_with_revision(&item, &revision)
+        .await
+        .expect("create item");
+
+    let created_at = default_timestamp();
+    let job_id = ingot_domain::ids::JobId::new();
+    let workspace = WorkspaceBuilder::new(h.project.id, WorkspaceKind::Authoring)
+        .path(
+            unique_temp_path("ingot-runtime-daemon-validation-stranded")
+                .display()
+                .to_string(),
+        )
+        .created_for_revision_id(revision.id)
+        .status(WorkspaceStatus::Busy)
+        .current_job_id(job_id)
+        .base_commit_oid(&seed_commit)
+        .head_commit_oid(&seed_commit)
+        .workspace_ref("refs/ingot/workspaces/daemon-validation-stranded")
+        .created_at(created_at)
+        .build();
+    h.db.create_workspace(&workspace)
+        .await
+        .expect("create workspace");
+
+    let mut stranded_job = JobBuilder::new(
+        h.project.id,
+        item_id,
+        revision_id,
+        StepId::ValidateCandidateInitial,
+    )
+    .id(job_id)
+    .status(JobStatus::Running)
+    .workspace_id(workspace.id)
+    .workspace_kind(WorkspaceKind::Authoring)
+    .execution_permission(ExecutionPermission::DaemonOnly)
+    .context_policy(ContextPolicy::None)
+    .phase_kind(PhaseKind::Validate)
+    .phase_template_slug("")
+    .job_input(JobInput::candidate_subject(
+        CommitOid::new(seed_commit.clone()),
+        CommitOid::new(seed_commit.clone()),
+    ))
+    .output_artifact_kind(OutputArtifactKind::ValidationReport)
+    .created_at(created_at)
+    .build();
+    stranded_job.state = JobState::Running {
+        assignment: JobAssignment::new(workspace.id),
+        lease: None,
+    };
+    h.db.create_job(&stranded_job)
+        .await
+        .expect("create stranded job");
+
+    h.dispatcher
+        .reconcile_startup()
+        .await
+        .expect("reconcile startup");
+
+    let updated_job = h.db.get_job(stranded_job.id).await.expect("updated job");
+    assert_eq!(updated_job.state.status(), JobStatus::Expired);
+    assert_eq!(
+        updated_job.state.outcome_class(),
+        Some(OutcomeClass::TransientFailure)
+    );
+    assert_eq!(
+        updated_job.state.error_code(),
+        Some("daemon_validation_interrupted")
+    );
+
+    let updated_workspace = h.db.get_workspace(workspace.id).await.expect("workspace");
+    assert_eq!(updated_workspace.state.status(), WorkspaceStatus::Stale);
+    assert_eq!(updated_workspace.state.current_job_id(), None);
 }
 
 #[tokio::test]

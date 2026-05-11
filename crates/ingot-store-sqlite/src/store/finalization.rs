@@ -9,7 +9,9 @@ use ingot_domain::ports::{
 };
 use sqlx::{Sqlite, Transaction};
 
-use super::helpers::{db_err, db_write_err, item_revision_is_stale, json_err, required, row_get};
+use super::helpers::{
+    db_err, db_text, db_write_err, item_revision_is_stale, json_err, required, row_get,
+};
 use crate::db::Database;
 
 impl Database {
@@ -62,9 +64,9 @@ async fn apply_target_ref_advanced(
            AND item_id = ?
            AND item_revision_id = ?",
     )
-    .bind(mutation.convergence_id)
-    .bind(mutation.item_id)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.convergence_id))
+    .bind(db_text(mutation.item_id))
+    .bind(db_text(mutation.expected_item_revision_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -91,8 +93,8 @@ async fn apply_target_ref_advanced(
          WHERE id = ?
            AND current_revision_id = ?",
     )
-    .bind(mutation.item_id)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.item_id))
+    .bind(db_text(mutation.expected_item_revision_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -113,8 +115,8 @@ async fn apply_target_ref_advanced(
            AND entity_id = ?
            AND operation_kind = 'finalize_target_ref'",
     )
-    .bind(mutation.git_operation_id)
-    .bind(mutation.convergence_id)
+    .bind(db_text(mutation.git_operation_id))
+    .bind(db_text(mutation.convergence_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -143,13 +145,13 @@ async fn apply_target_ref_advanced(
              completed_at = CASE WHEN status = 'finalized' THEN completed_at ELSE ? END
          WHERE id = ?",
     )
-    .bind(mutation.final_target_commit_oid.clone())
-    .bind(mutation.checkout_adoption.state)
+    .bind(db_text(&mutation.final_target_commit_oid))
+    .bind(db_text(mutation.checkout_adoption.state))
     .bind(mutation.checkout_adoption.blocker_message.as_deref())
     .bind(mutation.checkout_adoption.updated_at)
     .bind(mutation.checkout_adoption.synced_at)
     .bind(now)
-    .bind(mutation.convergence_id)
+    .bind(db_text(mutation.convergence_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -175,8 +177,8 @@ async fn apply_target_ref_advanced(
            AND operation_kind = 'finalize_target_ref'",
     )
     .bind(now)
-    .bind(mutation.git_operation_id)
-    .bind(mutation.convergence_id)
+    .bind(db_text(mutation.git_operation_id))
+    .bind(db_text(mutation.convergence_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -195,7 +197,7 @@ async fn apply_target_ref_advanced(
     )
     .bind(now)
     .bind(now)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.expected_item_revision_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -210,7 +212,7 @@ async fn apply_target_ref_advanced(
                AND status != 'abandoned'",
         )
         .bind(now)
-        .bind(workspace_id)
+        .bind(db_text(workspace_id))
         .execute(&mut **tx)
         .await
         .map_err(db_write_err)?;
@@ -228,8 +230,8 @@ async fn apply_target_ref_advanced(
                        AND current_revision_id = ?",
                 )
                 .bind(now)
-                .bind(mutation.item_id)
-                .bind(mutation.expected_item_revision_id)
+                .bind(db_text(mutation.item_id))
+                .bind(db_text(mutation.expected_item_revision_id))
                 .execute(&mut **tx)
                 .await
                 .map_err(db_write_err)?;
@@ -264,8 +266,8 @@ async fn apply_target_ref_advanced(
                    AND current_revision_id = ?",
             )
             .bind(now)
-            .bind(mutation.item_id)
-            .bind(mutation.expected_item_revision_id)
+            .bind(db_text(mutation.item_id))
+            .bind(db_text(mutation.expected_item_revision_id))
             .execute(&mut **tx)
             .await
             .map_err(db_write_err)?;
@@ -321,9 +323,9 @@ async fn apply_checkout_adoption_succeeded(
            AND item_id = ?
            AND item_revision_id = ?",
     )
-    .bind(mutation.convergence_id)
-    .bind(mutation.item_id)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.convergence_id))
+    .bind(db_text(mutation.item_id))
+    .bind(db_text(mutation.expected_item_revision_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -343,8 +345,8 @@ async fn apply_checkout_adoption_succeeded(
          WHERE id = ?
            AND current_revision_id = ?",
     )
-    .bind(mutation.item_id)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.item_id))
+    .bind(db_text(mutation.expected_item_revision_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -365,8 +367,8 @@ async fn apply_checkout_adoption_succeeded(
            AND entity_id = ?
            AND operation_kind = 'finalize_target_ref'",
     )
-    .bind(mutation.git_operation_id)
-    .bind(mutation.convergence_id)
+    .bind(db_text(mutation.git_operation_id))
+    .bind(db_text(mutation.convergence_id))
     .fetch_optional(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -394,7 +396,7 @@ async fn apply_checkout_adoption_succeeded(
     )
     .bind(mutation.synced_at)
     .bind(mutation.synced_at)
-    .bind(mutation.convergence_id)
+    .bind(db_text(mutation.convergence_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -406,7 +408,7 @@ async fn apply_checkout_adoption_succeeded(
          WHERE id = ?",
     )
     .bind(mutation.synced_at)
-    .bind(mutation.git_operation_id)
+    .bind(db_text(mutation.git_operation_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -424,12 +426,12 @@ async fn apply_checkout_adoption_succeeded(
          WHERE id = ?
            AND current_revision_id = ?",
     )
-    .bind(mutation.resolution_source)
-    .bind(mutation.approval_state)
+    .bind(db_text(mutation.resolution_source))
+    .bind(db_text(mutation.approval_state))
     .bind(mutation.synced_at)
     .bind(mutation.synced_at)
-    .bind(mutation.item_id)
-    .bind(mutation.expected_item_revision_id)
+    .bind(db_text(mutation.item_id))
+    .bind(db_text(mutation.expected_item_revision_id))
     .execute(&mut **tx)
     .await
     .map_err(db_write_err)?;
@@ -479,10 +481,10 @@ async fn insert_activity(
             id, project_id, event_type, entity_type, entity_id, payload, created_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(ActivityId::new())
-    .bind(project_id)
-    .bind(event_type)
-    .bind(subject.entity_type())
+    .bind(db_text(ActivityId::new()))
+    .bind(db_text(project_id))
+    .bind(db_text(event_type))
+    .bind(db_text(subject.entity_type()))
     .bind(subject.entity_id_string())
     .bind(serde_json::to_string(&payload).map_err(json_err)?)
     .bind(Utc::now())

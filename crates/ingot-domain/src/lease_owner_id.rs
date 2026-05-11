@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Newtype for execution lease owner identity (e.g. `"ingotd:12345"`),
 /// preventing accidental reuse with unrelated strings.
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[cfg_attr(feature = "sqlx", sqlx(transparent))]
 pub struct LeaseOwnerId(String);
 
 impl LeaseOwnerId {

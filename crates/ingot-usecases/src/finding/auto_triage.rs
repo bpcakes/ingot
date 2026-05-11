@@ -12,7 +12,6 @@ use ingot_domain::step_id::StepId;
 use tracing::info;
 
 use crate::UseCaseError;
-use crate::store::AutoTriageStore;
 
 use super::triage::{
     BacklogFindingOverrides, TriageFindingInput, backlog_finding_with_promotion,
@@ -124,7 +123,7 @@ pub async fn execute_auto_triage<S>(
     policy: &AutoTriagePolicy,
 ) -> Result<Vec<AutoTriagedFinding>, UseCaseError>
 where
-    S: AutoTriageStore,
+    S: FindingRepository + RevisionRepository + ItemRepository + ActivityRepository,
 {
     let all_findings = <S as FindingRepository>::list_by_item(store, item.id).await?;
     let job_findings: Vec<_> = all_findings

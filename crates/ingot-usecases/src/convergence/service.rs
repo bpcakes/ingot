@@ -265,12 +265,14 @@ mod system_actions {
     use ingot_domain::convergence::{Convergence, ConvergenceStatus};
     use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
     use ingot_domain::item::Item;
-    use ingot_domain::ports::InvalidatePreparedConvergenceMutation;
+    use ingot_domain::ports::{
+        ActivityRepository, ConvergenceQueueRepository, InvalidatePreparedConvergenceMutation,
+        InvalidatePreparedConvergenceRepository, WorkspaceRepository,
+    };
     use ingot_domain::revision::ItemRevision;
 
     use crate::UseCaseError;
     use crate::item::approval_state_for_policy;
-    use crate::store::{ConvergenceQueuePromotionStore, PreparedConvergenceInvalidationStore};
 
     use super::command::ConvergenceService;
     use super::finalization::{
@@ -384,7 +386,7 @@ mod system_actions {
         project_id: ingot_domain::ids::ProjectId,
     ) -> Result<bool, UseCaseError>
     where
-        S: ConvergenceQueuePromotionStore,
+        S: ConvergenceQueueRepository + ActivityRepository,
     {
         let entries = store.list_active_by_project(project_id).await?;
         let mut lanes_with_heads = entries
@@ -433,7 +435,7 @@ mod system_actions {
         convergences: &[Convergence],
     ) -> Result<bool, UseCaseError>
     where
-        S: PreparedConvergenceInvalidationStore,
+        S: WorkspaceRepository + InvalidatePreparedConvergenceRepository,
     {
         let mut convergence = match convergences
             .iter()

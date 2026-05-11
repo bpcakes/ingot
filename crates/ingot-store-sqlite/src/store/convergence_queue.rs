@@ -5,7 +5,7 @@ use ingot_domain::ports::{ConvergenceQueueRepository, RepositoryError};
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
+    db_err, db_text, db_write_err, ensure_rows_affected, map_optional_row, required_row, row_get,
 };
 use crate::db::Database;
 
@@ -20,7 +20,7 @@ impl Database {
              WHERE item_id = ?
              ORDER BY created_at ASC, id ASC",
         )
-        .bind(item_id)
+        .bind(db_text(item_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -33,7 +33,7 @@ impl Database {
         queue_entry_id: ConvergenceQueueEntryId,
     ) -> Result<ConvergenceQueueEntry, RepositoryError> {
         let row = sqlx::query("SELECT * FROM convergence_queue_entries WHERE id = ?")
-            .bind(queue_entry_id)
+            .bind(db_text(queue_entry_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -53,7 +53,7 @@ impl Database {
              ORDER BY created_at ASC, id ASC
              LIMIT 1",
         )
-        .bind(revision_id)
+        .bind(db_text(revision_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -74,8 +74,8 @@ impl Database {
                AND status = 'head'
              LIMIT 1",
         )
-        .bind(project_id)
-        .bind(target_ref)
+        .bind(db_text(project_id))
+        .bind(db_text(target_ref))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -97,8 +97,8 @@ impl Database {
              ORDER BY created_at ASC, id ASC
              LIMIT 1",
         )
-        .bind(project_id)
-        .bind(target_ref)
+        .bind(db_text(project_id))
+        .bind(db_text(target_ref))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -119,8 +119,8 @@ impl Database {
                AND status IN ('queued', 'head')
              ORDER BY created_at ASC, id ASC",
         )
-        .bind(project_id)
-        .bind(target_ref)
+        .bind(db_text(project_id))
+        .bind(db_text(target_ref))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -139,7 +139,7 @@ impl Database {
                AND status IN ('queued', 'head')
              ORDER BY target_ref ASC, created_at ASC, id ASC",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -157,12 +157,12 @@ impl Database {
                 created_at, updated_at, released_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(queue_entry.id)
-        .bind(queue_entry.project_id)
-        .bind(queue_entry.item_id)
-        .bind(queue_entry.item_revision_id)
-        .bind(&queue_entry.target_ref)
-        .bind(queue_entry.status)
+        .bind(db_text(queue_entry.id))
+        .bind(db_text(queue_entry.project_id))
+        .bind(db_text(queue_entry.item_id))
+        .bind(db_text(queue_entry.item_revision_id))
+        .bind(db_text(&queue_entry.target_ref))
+        .bind(db_text(queue_entry.status))
         .bind(queue_entry.head_acquired_at)
         .bind(queue_entry.created_at)
         .bind(queue_entry.updated_at)
@@ -183,11 +183,11 @@ impl Database {
              SET status = ?, head_acquired_at = ?, updated_at = ?, released_at = ?
              WHERE id = ?",
         )
-        .bind(queue_entry.status)
+        .bind(db_text(queue_entry.status))
         .bind(queue_entry.head_acquired_at)
         .bind(queue_entry.updated_at)
         .bind(queue_entry.released_at)
-        .bind(queue_entry.id)
+        .bind(db_text(queue_entry.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;

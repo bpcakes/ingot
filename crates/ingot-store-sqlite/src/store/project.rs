@@ -6,8 +6,8 @@ use ingot_domain::project::{AgentRouting, AutoTriagePolicy, Project};
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, required_row, row_get, row_get_optional_json,
-    serialize_optional_json,
+    db_err, db_text, db_write_err, ensure_rows_affected, required_row, row_get,
+    row_get_optional_json, serialize_optional_json,
 };
 use crate::db::Database;
 
@@ -31,7 +31,7 @@ impl Database {
              FROM projects
              WHERE id = ?",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -46,12 +46,12 @@ impl Database {
             "INSERT INTO projects (id, name, path, default_branch, color, execution_mode, agent_routing, auto_triage_policy, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(project.id)
+        .bind(db_text(project.id))
         .bind(&project.name)
         .bind(project.path.to_string_lossy().as_ref())
-        .bind(&project.default_branch)
+        .bind(db_text(&project.default_branch))
         .bind(&project.color)
-        .bind(project.execution_mode)
+        .bind(db_text(project.execution_mode))
         .bind(&agent_routing_json)
         .bind(&auto_triage_policy_json)
         .bind(project.created_at)
@@ -73,13 +73,13 @@ impl Database {
         )
         .bind(&project.name)
         .bind(project.path.to_string_lossy().as_ref())
-        .bind(&project.default_branch)
+        .bind(db_text(&project.default_branch))
         .bind(&project.color)
-        .bind(project.execution_mode)
+        .bind(db_text(project.execution_mode))
         .bind(&agent_routing_json)
         .bind(&auto_triage_policy_json)
         .bind(project.updated_at)
-        .bind(project.id)
+        .bind(db_text(project.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -89,7 +89,7 @@ impl Database {
 
     pub async fn delete_project(&self, project_id: ProjectId) -> Result<(), RepositoryError> {
         let result = sqlx::query("DELETE FROM projects WHERE id = ?")
-            .bind(project_id)
+            .bind(db_text(project_id))
             .execute(&self.pool)
             .await
             .map_err(db_write_err)?;

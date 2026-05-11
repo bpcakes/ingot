@@ -1,13 +1,43 @@
-use ingot_domain::ids::{ItemId, ItemRevisionId};
+use chrono::{DateTime, Utc};
+use ingot_domain::activity::{ActivityEntityType, ActivityEventType};
+use ingot_domain::agent::{AdapterKind, AgentProvider, AgentStatus};
+use ingot_domain::agent_model::AgentModel;
+use ingot_domain::branch_name::BranchName;
+use ingot_domain::commit_oid::CommitOid;
+use ingot_domain::convergence::{CheckoutAdoptionState, ConvergenceStatus, ConvergenceStrategy};
+use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
+use ingot_domain::finding::{
+    EstimatedScope, FindingSeverity, FindingSubjectKind, FindingTriageState,
+};
+use ingot_domain::git_operation::{GitEntityType, GitOperationStatus, OperationKind};
+use ingot_domain::git_ref::GitRef;
+use ingot_domain::ids::{
+    ActivityId, AgentId, ConvergenceId, ConvergenceQueueEntryId, FindingId, GitOperationId, ItemId,
+    ItemRevisionId, JobId, ProjectId, WorkspaceId,
+};
+use ingot_domain::item::{
+    ApprovalState, Classification, DoneReason, EscalationReason, ParkingState, Priority,
+    ResolutionSource, WorkflowVersion,
+};
+use ingot_domain::job::{
+    ContextPolicy, ExecutionPermission, JobStatus, OutcomeClass, OutputArtifactKind, PhaseKind,
+};
+use ingot_domain::lease_owner_id::LeaseOwnerId;
 use ingot_domain::ports::{ConflictKind, RepositoryError};
+use ingot_domain::project::ExecutionMode;
+use ingot_domain::revision::ApprovalPolicy;
+use ingot_domain::step_id::StepId;
+use ingot_domain::workspace::{RetentionPolicy, WorkspaceKind, WorkspaceStatus, WorkspaceStrategy};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::sqlite::{SqliteQueryResult, SqliteRow};
-use sqlx::{Decode, Row, Sqlite, Transaction, Type};
+use sqlx::{Encode, Row, Sqlite, Transaction, Type};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum StoreDecodeError {
     #[error("invalid json value: {0}")]
     Json(String),
+    #[error("invalid database text value: {0}")]
+    Text(String),
 }
 
 pub(super) fn parse_json<T>(value: String) -> Result<T, RepositoryError>
@@ -19,15 +49,195 @@ where
     })
 }
 
-pub(super) fn row_get<'row, T>(
-    row: &'row SqliteRow,
-    column: &'static str,
-) -> Result<T, RepositoryError>
-where
-    T: Decode<'row, Sqlite> + Type<Sqlite>,
-{
-    row.try_get(column).map_err(db_err)
+pub(super) trait StoreRowValue: Sized {
+    fn get(row: &SqliteRow, column: &'static str) -> Result<Self, RepositoryError>;
 }
+
+pub(super) fn row_get<T>(row: &SqliteRow, column: &'static str) -> Result<T, RepositoryError>
+where
+    T: StoreRowValue,
+{
+    T::get(row, column)
+}
+
+macro_rules! impl_sqlx_row_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl StoreRowValue for $ty {
+                fn get(row: &SqliteRow, column: &'static str) -> Result<Self, RepositoryError> {
+                    row.try_get(column).map_err(db_err)
+                }
+            }
+        )+
+    };
+}
+
+impl_sqlx_row_value!(
+    String,
+    Option<String>,
+    i64,
+    Option<i64>,
+    bool,
+    Option<bool>,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+);
+
+pub(super) struct DbText<T>(T);
+
+pub(super) fn db_text<T>(value: T) -> DbText<T> {
+    DbText(value)
+}
+
+pub(super) fn optional_db_text<T>(value: Option<T>) -> Option<DbText<T>> {
+    value.map(DbText)
+}
+
+impl<T> Type<Sqlite> for DbText<T> {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <String as Type<Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
+        <String as Type<Sqlite>>::compatible(ty)
+    }
+}
+
+impl<'q, T> Encode<'q, Sqlite> for DbText<T>
+where
+    T: Serialize,
+{
+    fn encode(
+        self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as Encode<Sqlite>>::encode(serialize_db_text(&self.0)?, buf)
+    }
+
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as Encode<Sqlite>>::encode(serialize_db_text(&self.0)?, buf)
+    }
+
+    fn size_hint(&self) -> usize {
+        0
+    }
+}
+
+fn serialize_db_text<T>(value: &T) -> Result<String, serde_json::Error>
+where
+    T: Serialize + ?Sized,
+{
+    match serde_json::to_value(value)? {
+        serde_json::Value::String(value) => Ok(value),
+        other => Ok(other.to_string()),
+    }
+}
+
+fn parse_db_text<T>(value: String) -> Result<T, RepositoryError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(serde_json::Value::String(value.clone())).map_err(|err| {
+        RepositoryError::Database(Box::new(StoreDecodeError::Text(format!("{value}: {err}"))))
+    })
+}
+
+fn row_get_db_text<T>(row: &SqliteRow, column: &'static str) -> Result<T, RepositoryError>
+where
+    T: DeserializeOwned,
+{
+    parse_db_text(row.try_get(column).map_err(db_err)?)
+}
+
+fn row_get_optional_db_text<T>(
+    row: &SqliteRow,
+    column: &'static str,
+) -> Result<Option<T>, RepositoryError>
+where
+    T: DeserializeOwned,
+{
+    row.try_get::<Option<String>, _>(column)
+        .map_err(db_err)?
+        .map(parse_db_text)
+        .transpose()
+}
+
+macro_rules! impl_db_text_row_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl StoreRowValue for $ty {
+                fn get(row: &SqliteRow, column: &'static str) -> Result<Self, RepositoryError> {
+                    row_get_db_text(row, column)
+                }
+            }
+
+            impl StoreRowValue for Option<$ty> {
+                fn get(row: &SqliteRow, column: &'static str) -> Result<Self, RepositoryError> {
+                    row_get_optional_db_text(row, column)
+                }
+            }
+        )+
+    };
+}
+
+impl_db_text_row_value!(
+    ActivityEntityType,
+    ActivityEventType,
+    ActivityId,
+    AdapterKind,
+    AgentId,
+    AgentModel,
+    AgentProvider,
+    AgentStatus,
+    ApprovalPolicy,
+    ApprovalState,
+    BranchName,
+    CheckoutAdoptionState,
+    Classification,
+    CommitOid,
+    ContextPolicy,
+    ConvergenceId,
+    ConvergenceQueueEntryId,
+    ConvergenceQueueEntryStatus,
+    ConvergenceStatus,
+    ConvergenceStrategy,
+    DoneReason,
+    EscalationReason,
+    EstimatedScope,
+    ExecutionPermission,
+    ExecutionMode,
+    FindingId,
+    FindingSeverity,
+    FindingSubjectKind,
+    FindingTriageState,
+    GitEntityType,
+    GitOperationId,
+    GitOperationStatus,
+    GitRef,
+    ItemId,
+    ItemRevisionId,
+    JobId,
+    JobStatus,
+    LeaseOwnerId,
+    OperationKind,
+    OutcomeClass,
+    OutputArtifactKind,
+    ParkingState,
+    PhaseKind,
+    Priority,
+    ProjectId,
+    ResolutionSource,
+    StepId,
+    RetentionPolicy,
+    WorkflowVersion,
+    WorkspaceId,
+    WorkspaceKind,
+    WorkspaceStatus,
+    WorkspaceStrategy,
+);
 
 pub(super) fn row_get_json<T>(row: &SqliteRow, column: &'static str) -> Result<T, RepositoryError>
 where
@@ -120,12 +330,15 @@ pub(super) async fn item_revision_is_stale(
     item_id: ItemId,
     expected_item_revision_id: ItemRevisionId,
 ) -> Result<bool, RepositoryError> {
-    let current_revision_id: Option<ItemRevisionId> =
-        sqlx::query_scalar("SELECT current_revision_id FROM items WHERE id = ?")
-            .bind(item_id)
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(db_err)?;
+    let row = sqlx::query("SELECT current_revision_id FROM items WHERE id = ?")
+        .bind(db_text(item_id))
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db_err)?;
+    let current_revision_id = row
+        .as_ref()
+        .map(|row| row_get(row, "current_revision_id"))
+        .transpose()?;
 
     Ok(current_revision_id != Some(expected_item_revision_id))
 }

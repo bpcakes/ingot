@@ -1312,7 +1312,8 @@ mod tests {
                         "head_commit_oid": "head"
                     },
                     "overall_risk": "low",
-                    "findings": []
+                    "findings": [],
+                    "extensions": null
                 })),
                 output_commit_oid: None,
             })
@@ -1378,7 +1379,11 @@ mod tests {
                     "summary": "ok",
                     "checks": [],
                     "findings": [],
-                    "extensions": null,
+                    "extensions": {
+                        "provider": {
+                            "trace_id": "trace-123"
+                        }
+                    },
                     "unexpected_provider_data": {
                         "must_live_under": "extensions"
                     }
@@ -1629,7 +1634,8 @@ mod tests {
                     "summary": "first",
                     "paths": ["src/lib.rs"],
                     "evidence": ["broken"]
-                }]
+                }],
+                "extensions": null
             })),
         };
         let repository = FakeRepository::new(test_context(job)).with_completion_finding_count(1);
@@ -1669,7 +1675,8 @@ mod tests {
                     "summary": "first",
                     "paths": ["src/lib.rs"],
                     "evidence": ["broken"]
-                }]
+                }],
+                "extensions": null
             })),
         };
         let service = test_service(test_context(job));
@@ -1684,7 +1691,8 @@ mod tests {
                 "summary": "first",
                 "paths": ["src/lib.rs"],
                 "evidence": ["broken"]
-            }]
+            }],
+            "extensions": null
         }));
 
         let result = service.execute(mismatched_command).await;
@@ -1750,7 +1758,8 @@ mod tests {
                     "summary": "first",
                     "paths": ["src/lib.rs"],
                     "evidence": ["broken"]
-                }]
+                }],
+                "extensions": null
             })),
         };
         let service = test_service(test_context(job));
@@ -1858,7 +1867,8 @@ mod tests {
                     "status": "pass",
                     "summary": "ok"
                 }],
-                "findings": []
+                "findings": [],
+                "extensions": null
             })),
             output_commit_oid: None,
         }
@@ -1870,16 +1880,17 @@ mod tests {
             outcome_class: OutcomeClass::Findings,
             result_schema_version: Some("finding_report:v1".into()),
             result_payload: Some(json!({
-                "outcome": "findings",
-                "summary": "Found issues",
-                "findings": [{
+                    "outcome": "findings",
+                    "summary": "Found issues",
+                    "findings": [{
                     "finding_key": "f-1",
                     "code": "BUG001",
                     "severity": "high",
                     "summary": "first",
                     "paths": ["src/lib.rs"],
                     "evidence": ["broken"]
-                }]
+                }],
+                "extensions": null
             })),
             output_commit_oid: None,
         }

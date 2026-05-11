@@ -7,10 +7,8 @@ use crate::branch_name::BranchName;
 
 /// Newtype for Git ref paths (e.g. `refs/heads/main`, `refs/ingot/workspaces/...`),
 /// preventing accidental field swaps between different ref-typed parameters.
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[cfg_attr(feature = "sqlx", sqlx(transparent))]
 pub struct GitRef(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

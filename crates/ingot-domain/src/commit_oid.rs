@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Newtype for Git commit OIDs, preventing accidental field swaps
 /// between different OID-typed parameters.
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[cfg_attr(feature = "sqlx", sqlx(transparent))]
 pub struct CommitOid(String);
 
 impl CommitOid {

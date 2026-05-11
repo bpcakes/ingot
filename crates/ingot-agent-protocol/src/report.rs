@@ -8,7 +8,7 @@
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::finding::FindingSeverity;
 use ingot_domain::job::{OutcomeClass, OutputArtifactKind};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as DeError};
 
 // ── Schema version constants ────────────────────────────────────────────────
 
@@ -89,12 +89,11 @@ pub fn finding_schema() -> serde_json::Value {
     })
 }
 
-pub fn nullable_closed_extensions_schema() -> serde_json::Value {
+pub fn nullable_extensions_schema() -> serde_json::Value {
     serde_json::json!({
         "anyOf": [
             {
-                "type": "object",
-                "additionalProperties": false
+                "type": "object"
             },
             {
                 "type": "null"
@@ -173,7 +172,7 @@ pub fn validation_report_schema() -> serde_json::Value {
                 "type": "array",
                 "items": finding_schema()
             },
-            "extensions": nullable_closed_extensions_schema()
+            "extensions": nullable_extensions_schema()
         },
         "required": ["outcome", "summary", "checks", "findings", "extensions"],
         "additionalProperties": false
@@ -200,7 +199,7 @@ pub fn review_report_schema() -> serde_json::Value {
                 "type": "array",
                 "items": finding_schema()
             },
-            "extensions": nullable_closed_extensions_schema()
+            "extensions": nullable_extensions_schema()
         },
         "required": ["outcome", "summary", "review_subject", "overall_risk", "findings", "extensions"],
         "additionalProperties": false
@@ -217,7 +216,7 @@ pub fn finding_report_schema() -> serde_json::Value {
                 "type": "array",
                 "items": finding_schema()
             },
-            "extensions": nullable_closed_extensions_schema()
+            "extensions": nullable_extensions_schema()
         },
         "required": ["outcome", "summary", "findings", "extensions"],
         "additionalProperties": false
@@ -320,6 +319,20 @@ pub fn parse_outcome_class(result_payload: &serde_json::Value) -> Result<Outcome
     }
 }
 
+fn deserialize_required_extensions<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match &value {
+        None => Ok(None),
+        Some(serde_json::Value::Object(_)) => Ok(value),
+        Some(_) => Err(D::Error::custom("extensions must be null or an object")),
+    }
+}
+
 // ── v1 deserialization types ────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -340,7 +353,7 @@ pub struct ValidationReportV1 {
     pub summary: String,
     pub checks: Vec<ValidationCheckV1>,
     pub findings: Vec<FindingV1>,
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_extensions")]
     pub extensions: Option<serde_json::Value>,
 }
 
@@ -359,7 +372,7 @@ pub struct ReviewReportV1 {
     pub review_subject: ReviewSubjectV1,
     pub overall_risk: ReviewOverallRisk,
     pub findings: Vec<FindingV1>,
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_extensions")]
     pub extensions: Option<serde_json::Value>,
 }
 
@@ -369,7 +382,7 @@ pub struct FindingReportV1 {
     pub outcome: String,
     pub summary: String,
     pub findings: Vec<FindingV1>,
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_required_extensions")]
     pub extensions: Option<serde_json::Value>,
 }
 
@@ -452,4 +465,112 @@ pub enum InvestigationEstimatedScope {
     Small,
     Medium,
     Large,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FindingReportV1, ReviewReportV1, ValidationReportV1, clean_review_report_payload,
+        clean_validation_report_payload,
+    };
+
+    #[test]
+    fn validation_reports_require_extensions_key() {
+        let mut payload = clean_validation_report_payload("ok");
+        payload.as_object_mut().unwrap().remove("extensions");
+
+        let error = serde_json::from_value::<ValidationReportV1>(payload)
+            .expect_err("missing extensions should be rejected");
+
+        assert!(error.to_string().contains("extensions"));
+    }
+
+    #[test]
+    fn validation_reports_accept_non_empty_extensions_object() {
+        let mut payload = clean_validation_report_payload("ok");
+        payload.as_object_mut().unwrap().insert(
+            "extensions".into(),
+            serde_json::json!({
+                "provider": {
+                    "trace_id": "trace-123",
+                    "model": "test-model"
+                }
+            }),
+        );
+
+        serde_json::from_value::<ValidationReportV1>(payload)
+            .expect("non-empty extensions object should be accepted");
+    }
+
+    #[test]
+    fn review_reports_require_extensions_key() {
+        let mut payload = clean_review_report_payload("base", "head");
+        payload.as_object_mut().unwrap().remove("extensions");
+
+        let error = serde_json::from_value::<ReviewReportV1>(payload)
+            .expect_err("missing extensions should be rejected");
+
+        assert!(error.to_string().contains("extensions"));
+    }
+
+    #[test]
+    fn review_reports_accept_non_empty_extensions_object() {
+        let mut payload = clean_review_report_payload("base", "head");
+        payload.as_object_mut().unwrap().insert(
+            "extensions".into(),
+            serde_json::json!({
+                "adapter": {
+                    "raw_exit_status": 0
+                }
+            }),
+        );
+
+        serde_json::from_value::<ReviewReportV1>(payload)
+            .expect("non-empty extensions object should be accepted");
+    }
+
+    #[test]
+    fn finding_reports_require_extensions_key() {
+        let payload = serde_json::json!({
+            "outcome": "clean",
+            "summary": "No issues found",
+            "findings": []
+        });
+
+        let error = serde_json::from_value::<FindingReportV1>(payload)
+            .expect_err("missing extensions should be rejected");
+
+        assert!(error.to_string().contains("extensions"));
+    }
+
+    #[test]
+    fn finding_reports_accept_non_empty_extensions_object() {
+        let payload = serde_json::json!({
+            "outcome": "clean",
+            "summary": "No issues found",
+            "findings": [],
+            "extensions": {
+                "project": {
+                    "external_run_id": "run-123"
+                }
+            }
+        });
+
+        serde_json::from_value::<FindingReportV1>(payload)
+            .expect("non-empty extensions object should be accepted");
+    }
+
+    #[test]
+    fn validation_reports_reject_non_object_extensions() {
+        let mut payload = clean_validation_report_payload("ok");
+        payload
+            .as_object_mut()
+            .unwrap()
+            .insert("extensions".into(), serde_json::json!("trace-123"));
+
+        let error = serde_json::from_value::<ValidationReportV1>(payload)
+            .expect_err("non-object extensions should be rejected");
+
+        assert!(error.to_string().contains("extensions"));
+    }
 }

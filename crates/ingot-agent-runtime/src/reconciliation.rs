@@ -74,6 +74,24 @@ impl JobDispatcher {
         Ok(made_progress)
     }
 
+    pub(crate) async fn reconcile_startup_daemon_validation_jobs(
+        &self,
+    ) -> Result<bool, RuntimeError> {
+        let active_jobs = self.db.list_active_jobs().await?;
+        let mut made_progress = false;
+        for job in active_jobs {
+            if job.state.status() == JobStatus::Running
+                && is_daemon_only_validation(&job)
+                && job.state.lease().is_none()
+            {
+                made_progress |= self
+                    .expire_running_job(job, "daemon_validation_interrupted")
+                    .await?;
+            }
+        }
+        Ok(made_progress)
+    }
+
     pub(crate) async fn reconcile_startup_assigned_jobs(&self) -> Result<bool, RuntimeError> {
         let active_jobs = self.db.list_active_jobs().await?;
         let mut made_progress = false;
@@ -636,6 +654,14 @@ impl JobDispatcher {
             return Ok(false);
         }
 
+        self.expire_running_job(job, "heartbeat_expired").await
+    }
+
+    async fn expire_running_job(
+        &self,
+        job: Job,
+        error_code: &'static str,
+    ) -> Result<bool, RuntimeError> {
         let _guard = self
             .project_locks
             .acquire_project_mutation(job.project_id)
@@ -652,7 +678,7 @@ impl JobDispatcher {
                 expected_item_revision_id: job.item_revision_id,
                 status: JobStatus::Expired,
                 outcome_class: Some(OutcomeClass::TransientFailure),
-                error_code: Some("heartbeat_expired".into()),
+                error_code: Some(error_code.into()),
                 error_message: None,
                 escalation_reason: None,
             })
@@ -668,7 +694,7 @@ impl JobDispatcher {
             job.project_id,
             ActivityEventType::JobFailed,
             ActivitySubject::Job(job.id),
-            serde_json::json!({ "item_id": job.item_id, "error_code": "heartbeat_expired" }),
+            serde_json::json!({ "item_id": job.item_id, "error_code": error_code }),
         )
         .await?;
 

@@ -130,6 +130,7 @@ impl JobDispatcher {
     pub async fn reconcile_startup(&self) -> Result<(), RuntimeError> {
         bootstrap::ensure_default_agents(&self.db).await?;
         let _ = self.reconcile_startup_assigned_jobs().await?;
+        let _ = self.reconcile_startup_daemon_validation_jobs().await?;
         ReconciliationService::new(RuntimeReconciliationPort {
             dispatcher: self.clone(),
         })

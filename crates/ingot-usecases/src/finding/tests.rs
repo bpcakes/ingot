@@ -45,7 +45,8 @@ fn extraction_marks_integrated_validation_findings_as_integrated() {
                 "summary": "Integrated issue",
                 "paths": ["src/lib.rs"],
                 "evidence": ["broken"]
-            }]
+            }],
+            "extensions": null
         })),
     };
 
@@ -265,12 +266,73 @@ fn validation_reports_require_checks_and_failed_signal_for_findings() {
             "outcome": "findings",
             "summary": "Found issues",
             "checks": [],
+            "findings": [],
+            "extensions": null
+        })),
+    };
+
+    let error = extract_findings(&item, &job, &[]).expect_err("expected protocol violation");
+    assert!(matches!(error, UseCaseError::ProtocolViolation(_)));
+}
+
+#[test]
+fn validation_reports_require_extensions_key() {
+    let item = nil_item();
+    let mut job = test_job();
+    job.step_id = StepId::ValidateCandidateInitial;
+    job.phase_kind = PhaseKind::Validate;
+    job.job_input = JobInput::candidate_subject("base".into(), "head".into());
+    job.state = ingot_domain::job::JobState::Completed {
+        assignment: None,
+        started_at: None,
+        outcome_class: OutcomeClass::Clean,
+        ended_at: chrono::Utc::now(),
+        output_commit_oid: None,
+        result_schema_version: Some("validation_report:v1".into()),
+        result_payload: Some(serde_json::json!({
+            "outcome": "clean",
+            "summary": "No issues",
+            "checks": [],
             "findings": []
         })),
     };
 
     let error = extract_findings(&item, &job, &[]).expect_err("expected protocol violation");
     assert!(matches!(error, UseCaseError::ProtocolViolation(_)));
+}
+
+#[test]
+fn validation_reports_accept_and_ignore_non_empty_extensions_object() {
+    let item = nil_item();
+    let mut job = test_job();
+    job.step_id = StepId::ValidateCandidateInitial;
+    job.phase_kind = PhaseKind::Validate;
+    job.job_input = JobInput::candidate_subject("base".into(), "head".into());
+    job.state = ingot_domain::job::JobState::Completed {
+        assignment: None,
+        started_at: None,
+        outcome_class: OutcomeClass::Clean,
+        ended_at: chrono::Utc::now(),
+        output_commit_oid: None,
+        result_schema_version: Some("validation_report:v1".into()),
+        result_payload: Some(serde_json::json!({
+            "outcome": "clean",
+            "summary": "No issues",
+            "checks": [],
+            "findings": [],
+            "extensions": {
+                "provider": {
+                    "trace_id": "trace-123",
+                    "model": "test-model"
+                }
+            }
+        })),
+    };
+
+    let extracted = extract_findings(&item, &job, &[]).expect("expected valid report");
+
+    assert_eq!(extracted.outcome_class, OutcomeClass::Clean);
+    assert!(extracted.findings.is_empty());
 }
 
 #[test]
@@ -294,7 +356,8 @@ fn review_reports_require_overall_risk() {
                 "base_commit_oid": "base",
                 "head_commit_oid": "head"
             },
-            "findings": []
+            "findings": [],
+            "extensions": null
         })),
     };
 
@@ -341,7 +404,8 @@ fn validation_reports_reject_duplicate_finding_keys() {
                     "paths": ["src/main.rs"],
                     "evidence": ["still broken"]
                 }
-            ]
+            ],
+            "extensions": null
         })),
     };
 
@@ -388,7 +452,8 @@ fn review_reports_reject_duplicate_finding_keys() {
                     "paths": ["src/main.rs"],
                     "evidence": ["still broken"]
                 }
-            ]
+            ],
+            "extensions": null
         })),
     };
 
@@ -430,7 +495,8 @@ fn finding_reports_reject_duplicate_finding_keys() {
                     "paths": ["src/main.rs"],
                     "evidence": ["still broken"]
                 }
-            ]
+            ],
+            "extensions": null
         })),
     };
 

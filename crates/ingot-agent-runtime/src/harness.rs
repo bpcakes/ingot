@@ -299,6 +299,7 @@ impl JobDispatcher {
             "summary": result_summary,
             "checks": checks,
             "findings": findings,
+            "extensions": null,
         });
         let outcome_class = if findings.is_empty() {
             OutcomeClass::Clean

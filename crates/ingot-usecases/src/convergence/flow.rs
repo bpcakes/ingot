@@ -525,19 +525,22 @@ mod finalization {
     use ingot_domain::git_operation::{
         GitOperation, GitOperationEntityRef, GitOperationStatus, OperationPayload,
     };
-    use ingot_domain::ids::ActivityId;
+    use ingot_domain::ids::{ActivityId, ConvergenceId, ProjectId};
     use ingot_domain::item::{ApprovalState, ResolutionSource};
     use ingot_domain::job::Job;
     use ingot_domain::ports::{
-        ActivityRepository, FinalizationCheckoutAdoptionSucceededMutation, FinalizationMutation,
-        FinalizationTargetRefAdvancedMutation, GitOperationRepository, RepositoryError,
+        ActivityRepository, ConvergenceRepository, FinalizationCheckoutAdoptionSucceededMutation,
+        FinalizationMutation, FinalizationRepository, FinalizationTargetRefAdvancedMutation,
+        GitOperationRepository, RepositoryError, WorkspaceRepository,
     };
     use ingot_domain::project::Project;
     use ingot_domain::revision::{ApprovalPolicy, ItemRevision};
+    use ingot_domain::workspace::WorkspaceStatus;
     use ingot_workflow::{Evaluator, NamedRecommendedAction, RecommendedAction};
+    use std::path::PathBuf;
+    use tracing::warn;
 
     use crate::UseCaseError;
-    use crate::store::FinalizeOperationStore;
 
     use super::types::{
         CheckoutFinalizationReadiness, FinalizePreparedTrigger, FinalizeTargetRefResult,
@@ -597,7 +600,7 @@ mod finalization {
         operation: &GitOperation,
     ) -> Result<GitOperation, UseCaseError>
     where
-        DB: FinalizeOperationStore,
+        DB: GitOperationRepository + ActivityRepository + FinalizationRepository,
     {
         let convergence_id = match &operation.entity {
             GitOperationEntityRef::Convergence(id) => *id,
@@ -648,6 +651,73 @@ mod finalization {
                 }),
             Err(other) => Err(UseCaseError::Repository(other)),
         }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FinalizedIntegrationWorkspaceCleanup {
+        pub project_id: ProjectId,
+        pub convergence_id: ConvergenceId,
+        pub workspace_path: PathBuf,
+    }
+
+    pub async fn apply_finalization_mutation_and_load_cleanup<DB>(
+        db: &DB,
+        mutation: FinalizationMutation,
+    ) -> Result<Option<FinalizedIntegrationWorkspaceCleanup>, UseCaseError>
+    where
+        DB: FinalizationRepository + ConvergenceRepository + WorkspaceRepository,
+    {
+        let cleanup = match &mutation {
+            FinalizationMutation::TargetRefAdvanced(mutation) => {
+                Some((mutation.project_id, mutation.convergence_id))
+            }
+            FinalizationMutation::CheckoutAdoptionSucceeded(_) => None,
+        };
+
+        db.apply_finalization_mutation(mutation)
+            .await
+            .map_err(UseCaseError::Repository)?;
+
+        let Some((project_id, convergence_id)) = cleanup else {
+            return Ok(None);
+        };
+        let convergence = match <DB as ConvergenceRepository>::get(db, convergence_id).await {
+            Ok(convergence) => convergence,
+            Err(error) => {
+                warn!(
+                    project_id = %project_id,
+                    convergence_id = %convergence_id,
+                    ?error,
+                    "failed best-effort integration workspace cleanup lookup after committed finalization",
+                );
+                return Ok(None);
+            }
+        };
+        let Some(workspace_id) = convergence.state.integration_workspace_id() else {
+            return Ok(None);
+        };
+        let workspace = match <DB as WorkspaceRepository>::get(db, workspace_id).await {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                warn!(
+                    project_id = %project_id,
+                    convergence_id = %convergence_id,
+                    workspace_id = %workspace_id,
+                    ?error,
+                    "failed best-effort integration workspace cleanup lookup after committed finalization",
+                );
+                return Ok(None);
+            }
+        };
+        if workspace.state.status() != WorkspaceStatus::Abandoned {
+            return Ok(None);
+        }
+
+        Ok(Some(FinalizedIntegrationWorkspaceCleanup {
+            project_id,
+            convergence_id,
+            workspace_path: workspace.path,
+        }))
     }
 
     pub async fn finalize_prepared_convergence<P>(
@@ -800,9 +870,162 @@ mod finalization {
 
         Ok(())
     }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::Mutex;
+
+        use ingot_domain::commit_oid::CommitOid;
+        use ingot_domain::ids::{GitOperationId, ItemId, ItemRevisionId, WorkspaceId};
+        use ingot_domain::workspace::Workspace;
+
+        use super::*;
+
+        struct CleanupLookupFailsDb {
+            applied: Mutex<bool>,
+        }
+
+        impl CleanupLookupFailsDb {
+            fn new() -> Self {
+                Self {
+                    applied: Mutex::new(false),
+                }
+            }
+
+            fn applied(&self) -> bool {
+                *self.applied.lock().expect("applied lock")
+            }
+        }
+
+        impl FinalizationRepository for CleanupLookupFailsDb {
+            async fn apply_finalization_mutation(
+                &self,
+                _mutation: FinalizationMutation,
+            ) -> Result<(), RepositoryError> {
+                *self.applied.lock().expect("applied lock") = true;
+                Ok(())
+            }
+        }
+
+        impl ConvergenceRepository for CleanupLookupFailsDb {
+            async fn list_by_revision(
+                &self,
+                _revision_id: ItemRevisionId,
+            ) -> Result<Vec<Convergence>, RepositoryError> {
+                unreachable!("cleanup helper only loads convergence by id")
+            }
+
+            async fn get(&self, _id: ConvergenceId) -> Result<Convergence, RepositoryError> {
+                Err(RepositoryError::Database(Box::new(std::io::Error::other(
+                    "lookup failed",
+                ))))
+            }
+
+            async fn create(&self, _convergence: &Convergence) -> Result<(), RepositoryError> {
+                unreachable!("cleanup helper does not create convergence")
+            }
+
+            async fn update(&self, _convergence: &Convergence) -> Result<(), RepositoryError> {
+                unreachable!("cleanup helper does not update convergence")
+            }
+
+            async fn find_active_for_revision(
+                &self,
+                _revision_id: ItemRevisionId,
+            ) -> Result<Option<Convergence>, RepositoryError> {
+                unreachable!("cleanup helper does not find active convergence")
+            }
+
+            async fn find_prepared_for_revision(
+                &self,
+                _revision_id: ItemRevisionId,
+            ) -> Result<Option<Convergence>, RepositoryError> {
+                unreachable!("cleanup helper does not find prepared convergence")
+            }
+
+            async fn list_by_item(
+                &self,
+                _item_id: ItemId,
+            ) -> Result<Vec<Convergence>, RepositoryError> {
+                unreachable!("cleanup helper does not list convergence by item")
+            }
+
+            async fn list_active(&self) -> Result<Vec<Convergence>, RepositoryError> {
+                unreachable!("cleanup helper does not list active convergences")
+            }
+        }
+
+        impl WorkspaceRepository for CleanupLookupFailsDb {
+            async fn list_by_project(
+                &self,
+                _project_id: ProjectId,
+            ) -> Result<Vec<Workspace>, RepositoryError> {
+                unreachable!("cleanup helper does not list workspaces by project")
+            }
+
+            async fn get(&self, _id: WorkspaceId) -> Result<Workspace, RepositoryError> {
+                unreachable!("convergence lookup fails before workspace lookup")
+            }
+
+            async fn create(&self, _workspace: &Workspace) -> Result<(), RepositoryError> {
+                unreachable!("cleanup helper does not create workspace")
+            }
+
+            async fn update(&self, _workspace: &Workspace) -> Result<(), RepositoryError> {
+                unreachable!("cleanup helper does not update workspace")
+            }
+
+            async fn find_authoring_for_revision(
+                &self,
+                _revision_id: ItemRevisionId,
+            ) -> Result<Option<Workspace>, RepositoryError> {
+                unreachable!("cleanup helper does not find authoring workspace")
+            }
+
+            async fn list_by_item(
+                &self,
+                _item_id: ItemId,
+            ) -> Result<Vec<Workspace>, RepositoryError> {
+                unreachable!("cleanup helper does not list workspaces by item")
+            }
+
+            async fn delete(&self, _id: WorkspaceId) -> Result<(), RepositoryError> {
+                unreachable!("cleanup helper does not delete workspace")
+            }
+        }
+
+        fn target_ref_advanced_mutation() -> FinalizationMutation {
+            FinalizationMutation::TargetRefAdvanced(FinalizationTargetRefAdvancedMutation {
+                project_id: ProjectId::new(),
+                item_id: ItemId::new(),
+                expected_item_revision_id: ItemRevisionId::new(),
+                convergence_id: ConvergenceId::new(),
+                git_operation_id: GitOperationId::new(),
+                final_target_commit_oid: CommitOid::new("abc123"),
+                checkout_adoption: FinalizedCheckoutAdoption::pending(Utc::now()),
+            })
+        }
+
+        #[tokio::test]
+        async fn cleanup_lookup_failure_after_committed_finalization_is_best_effort() {
+            let db = CleanupLookupFailsDb::new();
+
+            let cleanup =
+                apply_finalization_mutation_and_load_cleanup(&db, target_ref_advanced_mutation())
+                    .await
+                    .expect("cleanup lookup failure should not fail committed finalization");
+
+            assert!(cleanup.is_none());
+            assert!(
+                db.applied(),
+                "finalization mutation should still be applied"
+            );
+        }
+    }
 }
 
 pub use finalization::{
+    FinalizedIntegrationWorkspaceCleanup, apply_finalization_mutation_and_load_cleanup,
     finalize_prepared_convergence, find_or_create_finalize_operation,
     should_auto_finalize_prepared_convergence, should_invalidate_prepared_convergence,
     should_prepare_convergence,

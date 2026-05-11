@@ -2,7 +2,9 @@ use ingot_domain::ports::{
     InvalidatePreparedConvergenceMutation, InvalidatePreparedConvergenceRepository, RepositoryError,
 };
 
-use super::helpers::{db_err, db_write_err, ensure_rows_affected, json_err};
+use super::helpers::{
+    db_err, db_text, db_write_err, ensure_rows_affected, json_err, optional_db_text,
+};
 use crate::db::Database;
 
 impl Database {
@@ -25,21 +27,21 @@ impl Database {
                  conflict_summary = ?, completed_at = ?
              WHERE id = ?",
         )
-        .bind(state.integration_workspace_id())
-        .bind(convergence.source_head_commit_oid.clone())
-        .bind(&convergence.target_ref)
-        .bind(convergence.strategy)
-        .bind(state.status())
-        .bind(state.input_target_commit_oid().cloned())
-        .bind(state.prepared_commit_oid().cloned())
-        .bind(state.final_target_commit_oid().cloned())
-        .bind(state.checkout_adoption_state())
+        .bind(optional_db_text(state.integration_workspace_id()))
+        .bind(db_text(&convergence.source_head_commit_oid))
+        .bind(db_text(&convergence.target_ref))
+        .bind(db_text(convergence.strategy))
+        .bind(db_text(state.status()))
+        .bind(optional_db_text(state.input_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.prepared_commit_oid().cloned()))
+        .bind(optional_db_text(state.final_target_commit_oid().cloned()))
+        .bind(optional_db_text(state.checkout_adoption_state()))
         .bind(state.checkout_adoption_message())
         .bind(state.checkout_adoption_updated_at())
         .bind(state.checkout_adoption_synced_at())
         .bind(state.conflict_summary())
         .bind(state.completed_at())
-        .bind(convergence.id)
+        .bind(db_text(convergence.id))
         .execute(&mut *tx)
         .await
         .map_err(db_write_err)?;
@@ -56,15 +58,15 @@ impl Database {
                  WHERE id = ?",
             )
             .bind(workspace.path.to_string_lossy().as_ref())
-            .bind(workspace.target_ref.clone())
-            .bind(workspace.workspace_ref.clone())
-            .bind(workspace.state.base_commit_oid().cloned())
-            .bind(workspace.state.head_commit_oid().cloned())
-            .bind(workspace.retention_policy)
-            .bind(workspace.state.status())
-            .bind(workspace.state.current_job_id())
+            .bind(optional_db_text(workspace.target_ref.as_ref()))
+            .bind(optional_db_text(workspace.workspace_ref.as_ref()))
+            .bind(optional_db_text(workspace.state.base_commit_oid().cloned()))
+            .bind(optional_db_text(workspace.state.head_commit_oid().cloned()))
+            .bind(db_text(workspace.retention_policy))
+            .bind(db_text(workspace.state.status()))
+            .bind(optional_db_text(workspace.state.current_job_id()))
             .bind(workspace.updated_at)
-            .bind(workspace.id)
+            .bind(db_text(workspace.id))
             .execute(&mut *tx)
             .await
             .map_err(db_write_err)?;
@@ -79,9 +81,9 @@ impl Database {
              SET approval_state = ?, updated_at = ?
              WHERE id = ?",
         )
-        .bind(item.approval_state)
+        .bind(db_text(item.approval_state))
         .bind(item.updated_at)
-        .bind(item.id)
+        .bind(db_text(item.id))
         .execute(&mut *tx)
         .await
         .map_err(db_write_err)?;
@@ -95,10 +97,10 @@ impl Database {
                 id, project_id, event_type, entity_type, entity_id, payload, created_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(activity.id)
-        .bind(activity.project_id)
-        .bind(activity.event_type)
-        .bind(activity.subject.entity_type())
+        .bind(db_text(activity.id))
+        .bind(db_text(activity.project_id))
+        .bind(db_text(activity.event_type))
+        .bind(db_text(activity.subject.entity_type()))
         .bind(activity.subject.entity_id_string())
         .bind(serde_json::to_string(&activity.payload).map_err(json_err)?)
         .bind(activity.created_at)

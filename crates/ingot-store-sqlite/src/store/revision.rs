@@ -10,7 +10,8 @@ use sqlx::sqlite::SqliteRow;
 use super::item::insert_revision_query;
 
 use super::helpers::{
-    db_err, db_write_err, json_err, map_optional_row, required_row, row_get, row_get_json,
+    db_err, db_text, db_write_err, json_err, map_optional_row, optional_db_text, required_row,
+    row_get, row_get_json,
 };
 use crate::db::Database;
 
@@ -21,7 +22,7 @@ impl Database {
     ) -> Result<Vec<ItemRevision>, RepositoryError> {
         let rows =
             sqlx::query("SELECT * FROM item_revisions WHERE item_id = ? ORDER BY revision_no DESC")
-                .bind(item_id)
+                .bind(db_text(item_id))
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db_err)?;
@@ -34,7 +35,7 @@ impl Database {
         revision_id: ItemRevisionId,
     ) -> Result<ItemRevision, RepositoryError> {
         let row = sqlx::query("SELECT * FROM item_revisions WHERE id = ?")
-            .bind(revision_id)
+            .bind(db_text(revision_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -56,7 +57,7 @@ impl Database {
         revision_id: ItemRevisionId,
     ) -> Result<Option<RevisionContext>, RepositoryError> {
         let row = sqlx::query("SELECT * FROM revision_contexts WHERE item_revision_id = ?")
-            .bind(revision_id)
+            .bind(db_text(revision_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -78,10 +79,10 @@ impl Database {
                 updated_from_job_id = excluded.updated_from_job_id,
                 updated_at = excluded.updated_at",
         )
-        .bind(context.item_revision_id)
+        .bind(db_text(context.item_revision_id))
         .bind(&context.schema_version)
         .bind(serde_json::to_string(&context.payload).map_err(json_err)?)
-        .bind(context.updated_from_job_id)
+        .bind(optional_db_text(context.updated_from_job_id))
         .bind(context.updated_at)
         .execute(&self.pool)
         .await

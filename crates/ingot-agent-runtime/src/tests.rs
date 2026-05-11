@@ -8,6 +8,7 @@ use std::time::Duration;
 use ingot_agent_protocol::request::AgentRequest;
 use ingot_domain::activity::ActivityEventType;
 use ingot_domain::commit_oid::CommitOid;
+use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
 use ingot_domain::finding::{
     FindingSeverity, InvestigationFindingMetadata, InvestigationPromotion, InvestigationScope,
 };
@@ -71,7 +72,7 @@ fn nullable_fields_remain_present_in_required_schema_contracts() {
     let validation_schema = report::validation_report_schema();
     assert_eq!(
         schema_property(&validation_schema, "extensions"),
-        Some(report::nullable_closed_extensions_schema())
+        Some(report::nullable_extensions_schema())
     );
 }
 
@@ -1065,12 +1066,17 @@ async fn auto_queue_convergence_treats_conflicting_insert_as_noop() {
             created_at, updated_at, released_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(queue_entry.id)
-    .bind(queue_entry.project_id)
-    .bind(queue_entry.item_id)
-    .bind(queue_entry.item_revision_id)
-    .bind(&queue_entry.target_ref)
-    .bind(queue_entry.status)
+    .bind(queue_entry.id.to_string())
+    .bind(queue_entry.project_id.to_string())
+    .bind(queue_entry.item_id.to_string())
+    .bind(queue_entry.item_revision_id.to_string())
+    .bind(queue_entry.target_ref.to_string())
+    .bind(match queue_entry.status {
+        ConvergenceQueueEntryStatus::Queued => "queued",
+        ConvergenceQueueEntryStatus::Head => "head",
+        ConvergenceQueueEntryStatus::Released => "released",
+        ConvergenceQueueEntryStatus::Cancelled => "cancelled",
+    })
     .bind(queue_entry.head_acquired_at)
     .bind(queue_entry.created_at)
     .bind(queue_entry.updated_at)
@@ -1405,6 +1411,7 @@ async fn finish_report_run_reloads_project_before_auto_triage() {
                 "paths": ["src/lib.rs"],
                 "evidence": ["broken"],
             }],
+            "extensions": null,
         })),
     }));
     let harness = TestRuntimeHarness::new(runner).await;

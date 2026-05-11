@@ -16,6 +16,7 @@ use ingot_git::project_repo::{
 use ingot_usecases::convergence::{
     CheckoutFinalizationReadiness, ConvergenceSystemActionPort, FinalizeTargetRefResult,
     PreparedConvergenceFinalizePort, SystemActionItemState, SystemActionProjectState,
+    apply_finalization_mutation_and_load_cleanup,
 };
 use ingot_usecases::reconciliation::ReconciliationPort;
 use ingot_usecases::{UseCaseError, UseCaseInfraError};
@@ -359,44 +360,24 @@ impl PreparedConvergenceFinalizePort for RuntimeFinalizePort {
     ) -> impl Future<Output = Result<(), ingot_usecases::UseCaseError>> + Send {
         let dispatcher = self.dispatcher.clone();
         async move {
-            let cleanup = match &mutation {
-                FinalizationMutation::TargetRefAdvanced(mutation) => {
-                    Some((mutation.project_id, mutation.convergence_id))
-                }
-                FinalizationMutation::CheckoutAdoptionSucceeded(_) => None,
-            };
-            dispatcher
-                .db
-                .apply_finalization_mutation(mutation)
-                .await
-                .map_err(ingot_usecases::UseCaseError::Repository)?;
-
-            if let Some((project_id, convergence_id)) = cleanup {
+            let cleanup =
+                apply_finalization_mutation_and_load_cleanup(&dispatcher.db, mutation).await?;
+            if let Some(cleanup) = cleanup {
                 let cleanup_result: Result<(), RuntimeError> = async {
-                    let convergence = dispatcher.db.get_convergence(convergence_id).await?;
-                    let Some(workspace_id) = convergence.state.integration_workspace_id() else {
-                        return Ok(());
-                    };
-                    let workspace = dispatcher.db.get_workspace(workspace_id).await?;
-                    if workspace.state.status()
-                        != ingot_domain::workspace::WorkspaceStatus::Abandoned
-                    {
-                        return Ok(());
-                    }
                     let repo_path = dispatcher
                         .config
                         .state_root
                         .join("repos")
-                        .join(format!("{project_id}.git"));
-                    remove_workspace(repo_path.as_path(), &workspace.path).await?;
+                        .join(format!("{}.git", cleanup.project_id));
+                    remove_workspace(repo_path.as_path(), &cleanup.workspace_path).await?;
                     Ok(())
                 }
                 .await;
 
                 if let Err(error) = cleanup_result {
                     warn!(
-                        project_id = %project_id,
-                        convergence_id = %convergence_id,
+                        project_id = %cleanup.project_id,
+                        convergence_id = %cleanup.convergence_id,
                         ?error,
                         "failed best-effort integration workspace cleanup after committed finalization",
                     );

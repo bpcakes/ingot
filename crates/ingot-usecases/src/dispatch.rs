@@ -631,7 +631,10 @@ use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{ActivityId, GitOperationId, ItemId, ItemRevisionId, JobId, ProjectId};
 use ingot_domain::item::{EscalationReason, Item};
 use ingot_domain::job::{ExecutionPermission, Job, JobInput, JobStatus, OutcomeClass};
-use ingot_domain::ports::{ActivityRepository, JobRepository, WorkspaceRepository};
+use ingot_domain::ports::{
+    ActivityRepository, FindingRepository, GitOperationRepository, JobRepository,
+    WorkspaceRepository,
+};
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
@@ -641,10 +644,7 @@ use ingot_workflow::{ClosureRelevance, Evaluator, step};
 use crate::UseCaseError;
 use crate::authoring_history::build_candidate_subject_input;
 use crate::git_operation_journal::{create_planned, mark_applied};
-use crate::store::{
-    AutoDispatchStore, DispatchCleanupStore, DispatchStore, FindingCleanupStore,
-    InvestigationRefStore,
-};
+use crate::store::{AutoDispatchStore, DispatchStore};
 
 pub use planning::{DispatchJobCommand, dispatch_job, retry_job};
 
@@ -720,7 +720,7 @@ pub async fn plan_and_apply_investigation_ref<S, G>(
     commit_oid: &CommitOid,
 ) -> Result<(), UseCaseError>
 where
-    S: InvestigationRefStore,
+    S: GitOperationRepository + ActivityRepository,
     G: DispatchInfraPort,
 {
     let mut operation = GitOperation {
@@ -751,7 +751,7 @@ pub async fn cleanup_failed_dispatch<S, G>(
     precreated_workspace: Option<&Workspace>,
     investigation_ref_name: Option<&GitRef>,
 ) where
-    S: DispatchCleanupStore,
+    S: WorkspaceRepository + GitOperationRepository,
     G: DispatchInfraPort,
 {
     if let Some(workspace) = precreated_workspace {
@@ -812,7 +812,7 @@ pub async fn maybe_cleanup_investigation_ref<S, G>(
     finding: &Finding,
 ) -> Result<(), UseCaseError>
 where
-    S: FindingCleanupStore,
+    S: FindingRepository + GitOperationRepository + ActivityRepository,
     G: DispatchInfraPort,
 {
     if finding.source_step_id != StepId::InvestigateItem

@@ -26,8 +26,7 @@ use crate::item::{
     default_template_map_snapshot, next_sort_key, rework_budgets_from_policy_snapshot,
 };
 use crate::store::{
-    CreateItemStore, ItemRevisionMutationStore, ProjectedReviewDispatchStore, ReopenItemStore,
-    ResumeItemStore, UpdateItemStore,
+    ItemRevisionMutationStore, ProjectedReviewDispatchStore, ReopenItemStore, ResumeItemStore,
 };
 
 #[derive(Clone, Debug)]
@@ -84,7 +83,7 @@ pub async fn create_item<R, I, L>(
     command: CreateItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: CreateItemStore,
+    R: ProjectRepository + ItemRepository + ActivityRepository,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -180,7 +179,7 @@ pub async fn update_item<R, L>(
     command: UpdateItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: UpdateItemStore,
+    R: ProjectRepository + ItemRepository + ActivityRepository,
     L: ProjectMutationLockPort,
 {
     let _project = <R as ProjectRepository>::get(repo, command.project_id)

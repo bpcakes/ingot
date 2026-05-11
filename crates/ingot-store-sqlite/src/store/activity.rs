@@ -3,7 +3,7 @@ use ingot_domain::ids::ProjectId;
 use ingot_domain::ports::{ActivityRepository, ConflictKind, RepositoryError};
 use sqlx::sqlite::SqliteRow;
 
-use super::helpers::{db_err, db_write_err, json_err, row_get, row_get_json};
+use super::helpers::{db_err, db_text, db_write_err, json_err, row_get, row_get_json};
 use crate::db::Database;
 
 impl Database {
@@ -13,10 +13,10 @@ impl Database {
                 id, project_id, event_type, entity_type, entity_id, payload, created_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(activity.id)
-        .bind(activity.project_id)
-        .bind(activity.event_type)
-        .bind(activity.subject.entity_type())
+        .bind(db_text(activity.id))
+        .bind(db_text(activity.project_id))
+        .bind(db_text(activity.event_type))
+        .bind(db_text(activity.subject.entity_type()))
         .bind(activity.subject.entity_id_string())
         .bind(serde_json::to_string(&activity.payload).map_err(json_err)?)
         .bind(activity.created_at)
@@ -40,7 +40,7 @@ impl Database {
              ORDER BY created_at DESC
              LIMIT ? OFFSET ?",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .bind(limit as i64)
         .bind(offset as i64)
         .fetch_all(&self.pool)

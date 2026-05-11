@@ -5,11 +5,33 @@ use ingot_domain::revision::ItemRevision;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, required_row, row_get, row_get_json,
+    db_err, db_text, db_write_err, ensure_rows_affected, json_err, optional_db_text, required_row,
+    row_get, row_get_json,
 };
 use crate::db::Database;
 
 type SqliteQuery<'a> = sqlx::query::Query<'a, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'a>>;
+
+pub(super) fn lifecycle_state(lifecycle: &Lifecycle) -> &'static str {
+    match lifecycle {
+        Lifecycle::Open => "open",
+        Lifecycle::Done { .. } => "done",
+    }
+}
+
+pub(super) fn escalation_state(escalation: &Escalation) -> &'static str {
+    match escalation {
+        Escalation::None => "none",
+        Escalation::OperatorRequired { .. } => "operator_required",
+    }
+}
+
+pub(super) fn origin_kind(origin: &Origin) -> &'static str {
+    match origin {
+        Origin::Manual => "manual",
+        Origin::PromotedFinding { .. } => "promoted_finding",
+    }
+}
 
 impl Database {
     pub async fn list_items_by_project(
@@ -19,7 +41,7 @@ impl Database {
         let rows = sqlx::query(
             "SELECT * FROM items WHERE project_id = ? ORDER BY sort_key ASC, created_at ASC",
         )
-        .bind(project_id)
+        .bind(db_text(project_id))
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?;
@@ -29,7 +51,7 @@ impl Database {
 
     pub async fn get_item(&self, item_id: ItemId) -> Result<Item, RepositoryError> {
         let row = sqlx::query("SELECT * FROM items WHERE id = ?")
-            .bind(item_id)
+            .bind(db_text(item_id))
             .fetch_optional(&self.pool)
             .await
             .map_err(db_err)?;
@@ -46,24 +68,24 @@ impl Database {
                  priority = ?, labels = ?, operator_notes = ?, updated_at = ?, closed_at = ?
              WHERE id = ?",
         )
-        .bind(item.classification)
-        .bind(item.workflow_version)
-        .bind(item.lifecycle.as_db_str())
-        .bind(item.parking_state)
-        .bind(item.lifecycle.done_reason())
-        .bind(item.lifecycle.resolution_source())
-        .bind(item.approval_state)
-        .bind(item.escalation.as_db_str())
-        .bind(item.escalation.reason())
-        .bind(item.current_revision_id)
-        .bind(item.origin.as_db_str())
-        .bind(item.origin.finding_id())
-        .bind(item.priority)
+        .bind(db_text(item.classification))
+        .bind(db_text(item.workflow_version))
+        .bind(lifecycle_state(&item.lifecycle))
+        .bind(db_text(item.parking_state))
+        .bind(optional_db_text(item.lifecycle.done_reason()))
+        .bind(optional_db_text(item.lifecycle.resolution_source()))
+        .bind(db_text(item.approval_state))
+        .bind(escalation_state(&item.escalation))
+        .bind(optional_db_text(item.escalation.reason()))
+        .bind(db_text(item.current_revision_id))
+        .bind(origin_kind(&item.origin))
+        .bind(optional_db_text(item.origin.finding_id()))
+        .bind(db_text(item.priority))
         .bind(serde_json::to_string(&item.labels).map_err(json_err)?)
         .bind(item.operator_notes.as_deref())
         .bind(item.updated_at)
         .bind(item.lifecycle.closed_at())
-        .bind(item.id)
+        .bind(db_text(item.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -134,19 +156,19 @@ pub(crate) fn insert_revision_query<'a>(
             seed_target_commit_oid, supersedes_revision_id, created_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(revision.id)
-    .bind(revision.item_id)
+    .bind(db_text(revision.id))
+    .bind(db_text(revision.item_id))
     .bind(revision.revision_no as i64)
     .bind(&revision.title)
     .bind(&revision.description)
     .bind(&revision.acceptance_criteria)
-    .bind(&revision.target_ref)
-    .bind(revision.approval_policy)
+    .bind(db_text(&revision.target_ref))
+    .bind(db_text(revision.approval_policy))
     .bind(serde_json::to_string(&revision.policy_snapshot).map_err(json_err)?)
     .bind(serde_json::to_string(&revision.template_map_snapshot).map_err(json_err)?)
-    .bind(revision.seed.seed_commit_oid().cloned())
-    .bind(revision.seed.seed_target_commit_oid().clone())
-    .bind(revision.supersedes_revision_id)
+    .bind(optional_db_text(revision.seed.seed_commit_oid().cloned()))
+    .bind(db_text(revision.seed.seed_target_commit_oid()))
+    .bind(optional_db_text(revision.supersedes_revision_id))
     .bind(revision.created_at))
 }
 
@@ -159,21 +181,21 @@ pub(crate) fn insert_item_query<'a>(item: &'a Item) -> Result<SqliteQuery<'a>, R
             sort_key, created_at, updated_at, closed_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(item.id)
-    .bind(item.project_id)
-    .bind(item.classification)
-    .bind(item.workflow_version)
-    .bind(item.lifecycle.as_db_str())
-    .bind(item.parking_state)
-    .bind(item.lifecycle.done_reason())
-    .bind(item.lifecycle.resolution_source())
-    .bind(item.approval_state)
-    .bind(item.escalation.as_db_str())
-    .bind(item.escalation.reason())
-    .bind(item.current_revision_id)
-    .bind(item.origin.as_db_str())
-    .bind(item.origin.finding_id())
-    .bind(item.priority)
+    .bind(db_text(item.id))
+    .bind(db_text(item.project_id))
+    .bind(db_text(item.classification))
+    .bind(db_text(item.workflow_version))
+    .bind(lifecycle_state(&item.lifecycle))
+    .bind(db_text(item.parking_state))
+    .bind(optional_db_text(item.lifecycle.done_reason()))
+    .bind(optional_db_text(item.lifecycle.resolution_source()))
+    .bind(db_text(item.approval_state))
+    .bind(escalation_state(&item.escalation))
+    .bind(optional_db_text(item.escalation.reason()))
+    .bind(db_text(item.current_revision_id))
+    .bind(origin_kind(&item.origin))
+    .bind(optional_db_text(item.origin.finding_id()))
+    .bind(db_text(item.priority))
     .bind(serde_json::to_string(&item.labels).map_err(json_err)?)
     .bind(item.operator_notes.as_deref())
     .bind(&item.sort_key)

@@ -3,49 +3,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{FindingId, ItemId, ItemRevisionId, ProjectId};
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum Classification {
     Change,
     Bug,
     Investigation,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum ParkingState {
     Active,
     Deferred,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum DoneReason {
     Completed,
     Dismissed,
     Invalidated,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum ResolutionSource {
     SystemCommand,
     ApprovalCommand,
     ManualCommand,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum ApprovalState {
     NotRequired,
     NotRequested,
@@ -53,10 +43,8 @@ pub enum ApprovalState {
     Approved,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum EscalationReason {
     CandidateReworkBudgetExhausted,
     IntegrationReworkBudgetExhausted,
@@ -68,24 +56,19 @@ pub enum EscalationReason {
     Other,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "sqlx", sqlx(rename_all = "snake_case"))]
 pub enum Priority {
     Critical,
     Major,
     Minor,
 }
 
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkflowVersion {
     #[serde(rename = "delivery:v1")]
-    #[cfg_attr(feature = "sqlx", sqlx(rename = "delivery:v1"))]
     DeliveryV1,
     #[serde(rename = "investigation:v1")]
-    #[cfg_attr(feature = "sqlx", sqlx(rename = "investigation:v1"))]
     InvestigationV1,
 }
 
@@ -105,14 +88,6 @@ pub enum Lifecycle {
 }
 
 impl Lifecycle {
-    #[must_use]
-    pub fn as_db_str(&self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Done { .. } => "done",
-        }
-    }
-
     #[must_use]
     pub fn is_open(self) -> bool {
         matches!(self, Self::Open)
@@ -161,14 +136,6 @@ pub enum Escalation {
 
 impl Escalation {
     #[must_use]
-    pub fn as_db_str(&self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::OperatorRequired { .. } => "operator_required",
-        }
-    }
-
-    #[must_use]
     pub fn is_escalated(self) -> bool {
         matches!(self, Self::OperatorRequired { .. })
     }
@@ -195,14 +162,6 @@ pub enum Origin {
 
 impl Origin {
     #[must_use]
-    pub fn as_db_str(&self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::PromotedFinding { .. } => "promoted_finding",
-        }
-    }
-
-    #[must_use]
     pub fn is_promoted_finding(self) -> bool {
         matches!(self, Self::PromotedFinding { .. })
     }
@@ -213,57 +172,6 @@ impl Origin {
             Self::PromotedFinding { finding_id } => Some(finding_id),
             Self::Manual => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verify as_db_str() matches the serde tag value for each variant.
-    /// Guards against adding a variant to the enum but forgetting to
-    /// update as_db_str() (or vice-versa).
-    fn serde_tag_value<T: Serialize>(value: &T, tag_field: &str) -> String {
-        let json = serde_json::to_value(value).unwrap();
-        json[tag_field].as_str().unwrap().to_owned()
-    }
-
-    #[test]
-    fn lifecycle_as_db_str_matches_serde_tag() {
-        let open = Lifecycle::Open;
-        assert_eq!(open.as_db_str(), serde_tag_value(&open, "lifecycle_state"));
-
-        let done = Lifecycle::Done {
-            reason: DoneReason::Completed,
-            source: ResolutionSource::ManualCommand,
-            closed_at: Utc::now(),
-        };
-        assert_eq!(done.as_db_str(), serde_tag_value(&done, "lifecycle_state"));
-    }
-
-    #[test]
-    fn escalation_as_db_str_matches_serde_tag() {
-        let none = Escalation::None;
-        assert_eq!(none.as_db_str(), serde_tag_value(&none, "escalation_state"));
-
-        let esc = Escalation::OperatorRequired {
-            reason: EscalationReason::StepFailed,
-        };
-        assert_eq!(esc.as_db_str(), serde_tag_value(&esc, "escalation_state"));
-    }
-
-    #[test]
-    fn origin_as_db_str_matches_serde_tag() {
-        let manual = Origin::Manual;
-        assert_eq!(manual.as_db_str(), serde_tag_value(&manual, "origin_kind"));
-
-        let promoted = Origin::PromotedFinding {
-            finding_id: FindingId::new(),
-        };
-        assert_eq!(
-            promoted.as_db_str(),
-            serde_tag_value(&promoted, "origin_kind")
-        );
     }
 }
 

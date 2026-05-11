@@ -2,7 +2,7 @@ use ingot_domain::ids::{ItemId, ItemRevisionId, JobId};
 use ingot_domain::ports::{ConflictKind, RepositoryError};
 use sqlx::{Sqlite, Transaction};
 
-use crate::store::helpers::{db_err, item_revision_is_stale};
+use crate::store::helpers::{db_err, db_text, item_revision_is_stale, row_get};
 
 pub(super) async fn classify_job_conflict(
     tx: &mut Transaction<'_, Sqlite>,
@@ -27,7 +27,7 @@ pub(super) async fn classify_job_conflict(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let mut query = sqlx::query_scalar::<_, JobId>(&query).bind(job_id);
+    let mut query = sqlx::query(&query).bind(db_text(job_id));
     for status in expected_statuses {
         query = query.bind(*status);
     }
@@ -38,16 +38,20 @@ pub(super) async fn classify_job_conflict(
     }
 
     if require_workspace_binding {
-        let workspace_id: Option<ingot_domain::ids::WorkspaceId> = sqlx::query_scalar(
+        let row = sqlx::query(
             "SELECT workspace_id
              FROM jobs
              WHERE id = ?",
         )
-        .bind(job_id)
+        .bind(db_text(job_id))
         .fetch_optional(&mut **tx)
         .await
-        .map_err(db_err)?
-        .flatten();
+        .map_err(db_err)?;
+        let workspace_id: Option<ingot_domain::ids::WorkspaceId> = row
+            .as_ref()
+            .map(|row| row_get(row, "workspace_id"))
+            .transpose()?
+            .flatten();
         if workspace_id.is_none() {
             return Ok(RepositoryError::Conflict(ConflictKind::JobMissingWorkspace));
         }

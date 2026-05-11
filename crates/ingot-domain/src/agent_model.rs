@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Newtype wrapper for agent model identifiers (e.g. "claude-sonnet-4-6", "gpt-5.4"),
 /// preventing accidental reuse with unrelated strings.
-#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-#[cfg_attr(feature = "sqlx", sqlx(transparent))]
 pub struct AgentModel(String);
 
 impl AgentModel {

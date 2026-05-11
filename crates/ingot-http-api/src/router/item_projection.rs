@@ -1,60 +1,32 @@
-use ingot_domain::convergence::{CheckoutAdoptionState, Convergence, ConvergenceStatus};
-use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
+use ingot_domain::convergence::Convergence;
 use ingot_domain::finding::Finding;
 use ingot_domain::ids::{ItemId, ProjectId};
 use ingot_domain::item::Item;
-use ingot_domain::job::Job;
 use ingot_domain::project::Project;
-use ingot_domain::revision::ItemRevision;
 use ingot_usecases::UseCaseError;
-use ingot_usecases::finding::parse_revision_context_summary;
-use ingot_workflow::{
-    AllowedAction, BoardStatus, Evaluation, Evaluator, NamedRecommendedAction, PhaseStatus,
-    RecommendedAction,
+use ingot_usecases::application::{
+    FinalizationPhase, FinalizationStatus, ItemProjection, ItemRuntimeSnapshot, QueueStatus,
 };
+use ingot_usecases::finding::parse_revision_context_summary;
+use ingot_workflow::{Evaluation, Evaluator};
 
 use super::app::AppState;
 use super::support::errors::{repo_to_internal, repo_to_item, repo_to_project};
 use super::types::*;
 use crate::error::ApiError;
 
-pub(super) struct ItemRuntimeSnapshot {
-    pub current_revision: ItemRevision,
-    pub jobs: Vec<Job>,
-    pub findings: Vec<Finding>,
-    pub convergences: Vec<Convergence>,
-}
-
 pub(super) async fn load_item_runtime_snapshot(
     state: &AppState,
     project_id: ProjectId,
     item: &Item,
-) -> Result<ItemRuntimeSnapshot, UseCaseError> {
-    let db = &state.db;
-
-    let current_revision = db
-        .get_revision(item.current_revision_id)
-        .await
-        .map_err(UseCaseError::Repository)?;
-    let jobs = db
-        .list_jobs_by_item(item.id)
-        .await
-        .map_err(UseCaseError::Repository)?;
-    let findings = db
-        .list_findings_by_item(item.id)
-        .await
-        .map_err(UseCaseError::Repository)?;
-    let convergences = db
-        .list_convergences_by_item(item.id)
-        .await
-        .map_err(UseCaseError::Repository)?;
-    let convergences = hydrate_convergence_validity(state, project_id, convergences).await?;
-    Ok(ItemRuntimeSnapshot {
-        current_revision,
-        jobs,
-        findings,
-        convergences,
-    })
+) -> Result<ItemRuntimeSnapshot, ingot_usecases::UseCaseError> {
+    ingot_usecases::application::load_item_runtime_snapshot(
+        &state.db,
+        &state.infra(),
+        project_id,
+        item,
+    )
+    .await
 }
 
 pub(super) async fn load_item_detail(
@@ -165,18 +137,20 @@ pub(super) async fn evaluate_item_snapshot(
     snapshot: &ItemRuntimeSnapshot,
     evaluator: &Evaluator,
 ) -> Result<(Evaluation, FinalizationStatusResponse, QueueStatusResponse), ApiError> {
-    let ItemRuntimeSnapshot {
-        current_revision,
-        jobs,
-        findings,
-        convergences,
-    } = snapshot;
-    let evaluation = evaluator.evaluate(item, current_revision, jobs, findings, convergences);
-    let finalization = load_finalization_status(state, current_revision, convergences).await?;
-    let queue = load_queue_status(state, current_revision, project).await?;
-    let evaluation = overlay_evaluation_with_queue_state(evaluation, &finalization, &queue);
+    let ItemProjection {
+        evaluation,
+        finalization,
+        queue,
+    } = ingot_usecases::application::evaluate_item_snapshot(
+        &state.db, project, item, snapshot, evaluator,
+    )
+    .await?;
 
-    Ok((evaluation, finalization, queue))
+    Ok((
+        evaluation,
+        finalization_status_response(finalization),
+        queue_status_response(queue),
+    ))
 }
 
 fn convergence_response(convergence: Convergence) -> ConvergenceResponse {
@@ -190,156 +164,32 @@ fn convergence_response(convergence: Convergence) -> ConvergenceResponse {
     }
 }
 
-fn empty_queue_status() -> QueueStatusResponse {
+fn finalization_status_response(finalization: FinalizationStatus) -> FinalizationStatusResponse {
+    FinalizationStatusResponse {
+        phase: match finalization.phase {
+            FinalizationPhase::None => FinalizationPhaseResponse::None,
+            FinalizationPhase::ReadyToFinalize => FinalizationPhaseResponse::ReadyToFinalize,
+            FinalizationPhase::TargetRefAdvanced => FinalizationPhaseResponse::TargetRefAdvanced,
+        },
+        checkout_adoption_state: finalization.checkout_adoption_state,
+        checkout_adoption_message: finalization.checkout_adoption_message,
+        final_target_commit_oid: finalization.final_target_commit_oid,
+    }
+}
+
+fn queue_status_response(queue: QueueStatus) -> QueueStatusResponse {
     QueueStatusResponse {
-        state: None,
-        position: None,
-        lane_owner_item_id: None,
-        lane_target_ref: None,
+        state: queue.state,
+        position: queue.position,
+        lane_owner_item_id: queue.lane_owner_item_id,
+        lane_target_ref: queue.lane_target_ref,
     }
-}
-
-async fn load_finalization_status(
-    _state: &AppState,
-    revision: &ItemRevision,
-    convergences: &[Convergence],
-) -> Result<FinalizationStatusResponse, ApiError> {
-    let mut current_revision_convergences = convergences
-        .iter()
-        .filter(|convergence| convergence.item_revision_id == revision.id);
-
-    if let Some(convergence) = current_revision_convergences
-        .clone()
-        .find(|convergence| convergence.state.status() == ConvergenceStatus::Finalized)
-    {
-        return Ok(FinalizationStatusResponse {
-            phase: FinalizationPhaseResponse::TargetRefAdvanced,
-            checkout_adoption_state: convergence.state.checkout_adoption_state(),
-            checkout_adoption_message: convergence
-                .state
-                .checkout_adoption_message()
-                .map(ToOwned::to_owned),
-            final_target_commit_oid: convergence.state.final_target_commit_oid().cloned(),
-        });
-    }
-
-    if let Some(convergence) = current_revision_convergences
-        .find(|convergence| convergence.state.status() == ConvergenceStatus::Prepared)
-    {
-        return Ok(FinalizationStatusResponse {
-            phase: FinalizationPhaseResponse::ReadyToFinalize,
-            checkout_adoption_state: None,
-            checkout_adoption_message: None,
-            final_target_commit_oid: convergence.state.prepared_commit_oid().cloned(),
-        });
-    }
-
-    Ok(FinalizationStatusResponse {
-        phase: FinalizationPhaseResponse::None,
-        checkout_adoption_state: None,
-        checkout_adoption_message: None,
-        final_target_commit_oid: None,
-    })
-}
-
-pub(super) fn overlay_evaluation_with_queue_state(
-    mut evaluation: Evaluation,
-    finalization: &FinalizationStatusResponse,
-    queue: &QueueStatusResponse,
-) -> Evaluation {
-    let awaiting_lane = (queue.state.is_some()
-        && evaluation.next_recommended_action
-            == RecommendedAction::named(NamedRecommendedAction::PrepareConvergence))
-        || queue.state == Some(ConvergenceQueueEntryStatus::Queued);
-    if awaiting_lane {
-        set_awaiting_convergence_lane(&mut evaluation);
-    }
-
-    let awaiting_checkout_sync = finalization.phase == FinalizationPhaseResponse::TargetRefAdvanced
-        && matches!(
-            finalization.checkout_adoption_state,
-            Some(CheckoutAdoptionState::Pending | CheckoutAdoptionState::Blocked)
-        );
-    if awaiting_checkout_sync {
-        evaluation.next_recommended_action =
-            RecommendedAction::named(NamedRecommendedAction::ResolveCheckoutSync);
-        evaluation.dispatchable_step_id = None;
-        evaluation.allowed_actions.clear();
-        evaluation.phase_status = Some(PhaseStatus::AwaitingCheckoutSync);
-        evaluation.board_status = BoardStatus::Working;
-    }
-
-    evaluation
-}
-
-fn set_awaiting_convergence_lane(evaluation: &mut Evaluation) {
-    evaluation.next_recommended_action =
-        RecommendedAction::named(NamedRecommendedAction::AwaitConvergenceLane);
-    evaluation.dispatchable_step_id = None;
-    evaluation
-        .allowed_actions
-        .retain(|action| *action != AllowedAction::PrepareConvergence);
-    evaluation.phase_status = Some(PhaseStatus::AwaitingConvergence);
-}
-
-pub(super) async fn load_queue_status(
-    state: &AppState,
-    revision: &ItemRevision,
-    project: &Project,
-) -> Result<QueueStatusResponse, ApiError> {
-    let db = &state.db;
-
-    let Some(active_entry) = db
-        .find_active_queue_entry_for_revision(revision.id)
-        .await
-        .map_err(repo_to_internal)?
-    else {
-        return Ok(empty_queue_status());
-    };
-
-    let lane_entries = db
-        .list_active_queue_entries_for_lane(project.id, &revision.target_ref)
-        .await
-        .map_err(repo_to_internal)?;
-    let lane_owner_item_id = lane_entries
-        .iter()
-        .find(|entry| entry.status == ConvergenceQueueEntryStatus::Head)
-        .map(|entry| entry.item_id);
-    let position = lane_entries
-        .iter()
-        .position(|entry| entry.id == active_entry.id)
-        .map(|index| index as u32 + 1);
-
-    let queue = QueueStatusResponse {
-        state: Some(active_entry.status),
-        position,
-        lane_owner_item_id,
-        lane_target_ref: Some(active_entry.target_ref.clone()),
-    };
-
-    Ok(queue)
-}
-
-pub(super) async fn hydrate_convergence_validity(
-    state: &AppState,
-    project_id: ProjectId,
-    mut convergences: Vec<Convergence>,
-) -> Result<Vec<Convergence>, UseCaseError> {
-    let infra = state.infra();
-    for convergence in &mut convergences {
-        convergence.target_head_valid = infra
-            .compute_target_head_valid(project_id, convergence)
-            .await?;
-    }
-
-    Ok(convergences)
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::hydrate_convergence_validity;
     use crate::router::test_helpers::test_app_state;
     use chrono::Utc;
     use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId};
@@ -391,18 +241,28 @@ mod tests {
         .build();
         convergence.target_ref = "refs/heads/main".into();
 
-        let valid = hydrate_convergence_validity(&state, project.id, vec![convergence.clone()])
-            .await
-            .expect("compute validity");
+        let mut valid = vec![convergence.clone()];
+        ingot_usecases::application::hydrate_convergence_validity(
+            &state.infra(),
+            project.id,
+            &mut valid,
+        )
+        .await
+        .expect("compute validity");
         assert_eq!(valid[0].target_head_valid, Some(true));
 
         write_file(&repo.join("tracked.txt"), "next");
         git(&repo, &["add", "tracked.txt"]);
         git(&repo, &["commit", "-m", "next"]);
 
-        let stale = hydrate_convergence_validity(&state, project.id, vec![convergence])
-            .await
-            .expect("compute stale validity");
+        let mut stale = vec![convergence];
+        ingot_usecases::application::hydrate_convergence_validity(
+            &state.infra(),
+            project.id,
+            &mut stale,
+        )
+        .await
+        .expect("compute stale validity");
         assert_eq!(stale[0].target_head_valid, Some(false));
     }
 }

@@ -71,11 +71,11 @@ async fn prepared_convergence_requires_integration_workspace_in_schema() {
             prepared_commit_oid
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(ConvergenceId::new())
-    .bind(project_id)
-    .bind(item_id)
-    .bind(revision_id)
-    .bind(source_workspace_id)
+    .bind(ConvergenceId::new().to_string())
+    .bind(project_id.to_string())
+    .bind(item_id.to_string())
+    .bind(revision_id.to_string())
+    .bind(source_workspace_id.to_string())
     .bind(Option::<String>::None)
     .bind("head")
     .bind("refs/heads/main")
@@ -112,11 +112,11 @@ async fn queued_convergence_allows_missing_integration_workspace_in_schema() {
             source_head_commit_oid, target_ref, strategy, status
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(convergence_id)
-    .bind(project_id)
-    .bind(item_id)
-    .bind(revision_id)
-    .bind(source_workspace_id)
+    .bind(convergence_id.to_string())
+    .bind(project_id.to_string())
+    .bind(item_id.to_string())
+    .bind(revision_id.to_string())
+    .bind(source_workspace_id.to_string())
     .bind(Option::<String>::None)
     .bind("head")
     .bind("refs/heads/main")

@@ -8,8 +8,9 @@ mod tests;
 pub use flow::{
     ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceApprovalContext,
     ConvergenceCommandPort, ConvergenceQueuePrepareContext, ConvergenceSystemActionPort,
-    FinalizePreparedTrigger, FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
-    RejectApprovalContext, RejectApprovalTeardown, SystemActionItemState, SystemActionProjectState,
+    FinalizePreparedTrigger, FinalizeTargetRefResult, FinalizedIntegrationWorkspaceCleanup,
+    PreparedConvergenceFinalizePort, RejectApprovalContext, RejectApprovalTeardown,
+    SystemActionItemState, SystemActionProjectState, apply_finalization_mutation_and_load_cleanup,
     build_convergence_approval_context, build_reject_approval_context,
     finalize_prepared_convergence, find_or_create_finalize_operation,
     should_auto_finalize_prepared_convergence, should_invalidate_prepared_convergence,

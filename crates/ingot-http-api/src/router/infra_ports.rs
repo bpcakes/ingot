@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use ingot_domain::commit_oid::CommitOid;
-use ingot_domain::convergence::Convergence;
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::ProjectId;
 use ingot_domain::job::Job;
@@ -120,17 +119,6 @@ impl HttpInfraAdapter {
         )
         .await
         .map_err(git_to_usecase_error)
-    }
-
-    pub(super) async fn compute_target_head_valid(
-        &self,
-        project_id: ProjectId,
-        convergence: &Convergence,
-    ) -> Result<Option<bool>, UseCaseError> {
-        let resolved = self
-            .resolve_project_ref_oid(project_id, &convergence.target_ref)
-            .await?;
-        Ok(convergence.target_head_valid_for_resolved_oid(resolved.as_ref()))
     }
 
     pub(super) async fn ensure_authoring_workspace(

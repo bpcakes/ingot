@@ -5,8 +5,8 @@ use ingot_domain::ports::{ConflictKind, GitOperationRepository, RepositoryError}
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
-    db_err, db_write_err, ensure_rows_affected, json_err, map_optional_row, row_get,
-    row_get_optional_json,
+    db_err, db_text, db_write_err, ensure_rows_affected, json_err, map_optional_row,
+    optional_db_text, row_get, row_get_optional_json,
 };
 use crate::db::Database;
 
@@ -22,17 +22,17 @@ impl Database {
                 expected_old_oid, new_oid, commit_oid, status, metadata, created_at, completed_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(wire.id)
-        .bind(wire.project_id)
-        .bind(wire.operation_kind)
-        .bind(wire.entity_type)
+        .bind(db_text(wire.id))
+        .bind(db_text(wire.project_id))
+        .bind(db_text(wire.operation_kind))
+        .bind(db_text(wire.entity_type))
         .bind(&wire.entity_id)
-        .bind(wire.workspace_id)
-        .bind(wire.ref_name.clone())
-        .bind(wire.expected_old_oid.clone())
-        .bind(wire.new_oid.clone())
-        .bind(wire.commit_oid.clone())
-        .bind(wire.status)
+        .bind(optional_db_text(wire.workspace_id))
+        .bind(optional_db_text(wire.ref_name.clone()))
+        .bind(optional_db_text(wire.expected_old_oid.clone()))
+        .bind(optional_db_text(wire.new_oid.clone()))
+        .bind(optional_db_text(wire.commit_oid.clone()))
+        .bind(db_text(wire.status))
         .bind(
             wire.metadata
                 .as_ref()
@@ -60,12 +60,12 @@ impl Database {
                  status = ?, metadata = ?, completed_at = ?
              WHERE id = ?",
         )
-        .bind(wire.workspace_id)
-        .bind(wire.ref_name.clone())
-        .bind(wire.expected_old_oid.clone())
-        .bind(wire.new_oid.clone())
-        .bind(wire.commit_oid.clone())
-        .bind(wire.status)
+        .bind(optional_db_text(wire.workspace_id))
+        .bind(optional_db_text(wire.ref_name.clone()))
+        .bind(optional_db_text(wire.expected_old_oid.clone()))
+        .bind(optional_db_text(wire.new_oid.clone()))
+        .bind(optional_db_text(wire.commit_oid.clone()))
+        .bind(db_text(wire.status))
         .bind(
             wire.metadata
                 .as_ref()
@@ -74,7 +74,7 @@ impl Database {
                 .map_err(json_err)?,
         )
         .bind(wire.completed_at)
-        .bind(wire.id)
+        .bind(db_text(wire.id))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
@@ -114,7 +114,7 @@ impl Database {
              ORDER BY created_at ASC
              LIMIT 1",
         )
-        .bind(convergence_id)
+        .bind(db_text(convergence_id))
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
@@ -129,7 +129,7 @@ impl Database {
         sqlx::query(
             "DELETE FROM git_operations WHERE operation_kind = 'create_investigation_ref' AND ref_name = ?",
         )
-        .bind(ref_name)
+        .bind(db_text(ref_name))
         .execute(&self.pool)
         .await
         .map_err(db_write_err)?;
