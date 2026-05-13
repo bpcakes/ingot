@@ -1,12 +1,18 @@
-const { app, BrowserWindow, dialog, protocol } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, protocol } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const http = require('node:http')
 const https = require('node:https')
 const path = require('node:path')
 const { daemonApiUrl, normalizeApiOrigin } = require('./daemon-url.cjs')
+const {
+  rendererEventIsTrusted,
+  rendererUrlIsTrusted: rendererUrlMatchesTrustedOrigins,
+} = require('./desktop-security.cjs')
 
 const isDev = !app.isPackaged
+const usesDevServer = isDev && Boolean(process.env.VITE_DEV_SERVER_URL)
+const devServerUrl = usesDevServer ? process.env.VITE_DEV_SERVER_URL : undefined
 
 let apiOrigin = null
 let daemonProcess = null
@@ -54,6 +60,24 @@ function getApiOrigin() {
     apiOrigin = normalizeApiOrigin(process.env.INGOT_API_ORIGIN)
   }
   return apiOrigin
+}
+
+function rendererUrlIsTrusted(rawUrl) {
+  return rendererUrlMatchesTrustedOrigins(rawUrl, {
+    isDev: usesDevServer,
+    devServerUrl,
+  })
+}
+
+function ensureTrustedIpcSender(event) {
+  if (
+    !rendererEventIsTrusted(event, {
+      isDev: usesDevServer,
+      devServerUrl,
+    })
+  ) {
+    throw new Error('Rejected IPC request from untrusted renderer')
+  }
 }
 
 function healthUrl() {
@@ -242,6 +266,57 @@ function registerAppProtocol() {
   })
 }
 
+function registerDesktopIpc() {
+  ipcMain.handle('ingot:pick-project-directory', async (event) => {
+    ensureTrustedIpcSender(event)
+
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    if (!owner || owner.isDestroyed()) {
+      const error = new Error('Unable to resolve project picker window')
+      console.error(error)
+      throw error
+    }
+
+    const options = {
+      title: 'Select project repository',
+      buttonLabel: 'Select repository',
+      properties: ['openDirectory'],
+    }
+    const result = await dialog.showOpenDialog(owner, options)
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+
+    return result.filePaths[0]
+  })
+}
+
+function limitWindowNavigation(win) {
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!rendererUrlIsTrusted(url)) {
+      console.warn(`Blocked untrusted navigation to ${url}`)
+      event.preventDefault()
+    }
+  })
+
+  win.webContents.on('will-redirect', (event, url) => {
+    if (!rendererUrlIsTrusted(url)) {
+      console.warn(`Blocked untrusted redirect to ${url}`)
+      event.preventDefault()
+    }
+  })
+
+  // Links can originate from project-authored markdown, so keep new windows disabled until an allowlist exists.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+}
+
+function createTrustedBrowserWindow(options) {
+  const win = new BrowserWindow(options)
+  limitWindowNavigation(win)
+  return win
+}
+
 async function proxyApi(request, url) {
   const targetUrl = daemonApiUrl(getApiOrigin(), url.pathname, url.search)
   const method = request.method.toUpperCase()
@@ -264,21 +339,23 @@ async function proxyApi(request, url) {
 }
 
 async function createWindow() {
-  mainWindow = new BrowserWindow({
+  mainWindow = createTrustedBrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 980,
     minHeight: 640,
     title: 'Ingot',
     webPreferences: {
+      // Preload uses this argument to choose the same dev/prod bridge shape as the main process.
+      additionalArguments: [`--ingot-use-vite-dev-server=${usesDevServer ? '1' : '0'}`],
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   })
 
-  if (isDev && process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
+  if (usesDevServer) {
+    await mainWindow.loadURL(devServerUrl)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
     return
   }
@@ -288,6 +365,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   registerAppProtocol()
+  registerDesktopIpc()
 
   try {
     await ensureDaemon()

@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "electron:dev": "node electron/dev.cjs",
-    "electron:test": "node --test electron/*.test.cjs && node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/dev.cjs && node --check electron/daemon-url.cjs && node --check electron/daemon-url.test.cjs",
+    "electron:test": "node --test electron/*.test.cjs && node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/dev.cjs && node --check electron/daemon-url.cjs && node --check electron/daemon-url.test.cjs && node --check electron/desktop-security.cjs && node --check electron/desktop-security.test.cjs",
     "electron:build": "bun run build && cargo build --release --bin ingotd --manifest-path ../Cargo.toml && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
     "electron:dist": "bun run build && cargo build --release --bin ingotd --manifest-path ../Cargo.toml && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
     "test": "vitest run",

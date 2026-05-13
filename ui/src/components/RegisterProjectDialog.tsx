@@ -1,4 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { FolderOpen } from 'lucide-react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -31,6 +33,8 @@ export function RegisterProjectDialog({ open, onOpenChange }: RegisterProjectDia
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const form = useForm<CreateProjectForm>({ defaultValues: initialValues })
+  const [isPickingProjectDirectory, setIsPickingProjectDirectory] = useState(false)
+  const canPickProjectDirectory = Boolean(window.ingotDesktop?.pickProjectDirectory)
 
   const mutation = useMutation({
     mutationFn: (values: CreateProjectForm) =>
@@ -55,6 +59,30 @@ export function RegisterProjectDialog({ open, onOpenChange }: RegisterProjectDia
     if (!next) {
       form.reset(initialValues)
       mutation.reset()
+    }
+  }
+
+  async function handlePickProjectDirectory() {
+    if (isPickingProjectDirectory) return
+
+    setIsPickingProjectDirectory(true)
+    try {
+      const path = await window.ingotDesktop?.pickProjectDirectory?.()
+      if (!path) return
+
+      form.setValue('path', path, {
+        shouldDirty: true,
+        shouldTouch: true,
+        shouldValidate: true,
+      })
+    } catch (error) {
+      console.error(error)
+      // Keep picker failures generic in the UI; the raw IPC/OS detail stays in devtools.
+      toast.error('Path picker failed.', {
+        description: 'Path picker unavailable.',
+      })
+    } finally {
+      setIsPickingProjectDirectory(false)
     }
   }
 
@@ -89,9 +117,22 @@ export function RegisterProjectDialog({ open, onOpenChange }: RegisterProjectDia
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Repository path</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Repository path" {...field} />
-                  </FormControl>
+                  <div className="flex gap-2">
+                    <FormControl>
+                      <Input className="min-w-0 flex-1" placeholder="Repository path" {...field} />
+                    </FormControl>
+                    {canPickProjectDirectory ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={isPickingProjectDirectory}
+                        onClick={handlePickProjectDirectory}
+                      >
+                        <FolderOpen data-icon="inline-start" />
+                        Browse
+                      </Button>
+                    ) : null}
+                  </div>
                   <FormMessage />
                 </FormItem>
               )}

@@ -5,6 +5,7 @@ declare global {
     ingotDesktop?: {
       apiOrigin?: string
       wsOrigin?: string
+      pickProjectDirectory?: () => Promise<string | null>
     }
   }
 }
