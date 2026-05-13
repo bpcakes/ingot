@@ -6,8 +6,9 @@ use ingot_domain::ids::{ActivityId, FindingId, ItemId, ProjectId};
 use ingot_domain::item::{ApprovalState, Item};
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ActivityRepository, FindingRepository, ItemRepository, JobRepository, ProjectMutationLockPort,
-    ProjectRepository, RepositoryError, RevisionRepository,
+    ActivityRepository, FindingRepository, GitOperationRepository, ItemRepository, JobRepository,
+    ProjectMutationLockPort, ProjectRepository, RepositoryError, RevisionRepository,
+    WorkspaceRepository,
 };
 use ingot_domain::project::Project;
 use ingot_domain::revision::{ApprovalPolicy, ItemRevision};
@@ -27,7 +28,7 @@ use crate::finding::{
 };
 use crate::item::{next_sort_key, next_sort_key_after, pending_approval_state};
 use crate::job::{DispatchJobCommand, dispatch_job};
-use crate::store::{ApplyFindingTriageStore, BatchPromoteFindingsStore, PromoteFindingStore};
+use crate::store::ItemRuntimeSnapshotStore;
 
 #[derive(Clone, Debug)]
 pub struct TriageFindingCommand {
@@ -84,7 +85,15 @@ pub async fn apply_finding_triage<R, I, L>(
     command: TriageFindingCommand,
 ) -> Result<AppliedFindingTriage, UseCaseError>
 where
-    R: ApplyFindingTriageStore,
+    R: ProjectRepository
+        + ItemRepository
+        + RevisionRepository
+        + JobRepository
+        + FindingRepository
+        + ActivityRepository
+        + WorkspaceRepository
+        + GitOperationRepository
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort + DispatchInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -257,7 +266,15 @@ pub async fn promote_finding<R, I, L>(
     command: PromoteFindingCommand,
 ) -> Result<PromoteFindingOutput, UseCaseError>
 where
-    R: PromoteFindingStore,
+    R: ProjectRepository
+        + ItemRepository
+        + RevisionRepository
+        + JobRepository
+        + FindingRepository
+        + ActivityRepository
+        + WorkspaceRepository
+        + GitOperationRepository
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort + DispatchInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -321,7 +338,12 @@ pub async fn batch_promote_findings_command<R, L>(
     command: BatchPromoteFindingsCommand,
 ) -> Result<BatchPromoteOutput, UseCaseError>
 where
-    R: BatchPromoteFindingsStore,
+    R: ProjectRepository
+        + FindingRepository
+        + ItemRepository
+        + RevisionRepository
+        + JobRepository
+        + ActivityRepository,
     L: ProjectMutationLockPort,
 {
     if command.finding_ids.is_empty() {
@@ -405,7 +427,12 @@ async fn dispatch_projected_item_job<R, I>(
     dispatch_origin: &'static str,
 ) -> Result<Option<Job>, UseCaseError>
 where
-    R: PromoteFindingStore,
+    R: ItemRepository
+        + JobRepository
+        + WorkspaceRepository
+        + ActivityRepository
+        + GitOperationRepository
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort + DispatchInfraPort,
 {
     let item = <R as ItemRepository>::get(repo, item_id)

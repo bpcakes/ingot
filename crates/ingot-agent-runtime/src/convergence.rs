@@ -381,7 +381,6 @@ impl JobDispatcher {
                 workspace_id: integration_workspace.id,
                 ref_name: integration_workspace.workspace_ref.clone(),
                 expected_old_oid: input_target_commit_oid.clone(),
-                new_oid: None,
                 commit_oid: None,
                 replay_metadata: Some(ConvergenceReplayMetadata {
                     source_commit_oids: source_commit_oids.clone(),

@@ -6,14 +6,13 @@ use ingot_domain::item::Item;
 use ingot_domain::job::Job;
 use ingot_domain::project::Project;
 use ingot_domain::revision::{ApprovalPolicy, AuthoringBaseSeed, ItemRevision};
-use ingot_usecases::UseCaseError;
 use ingot_usecases::item::{
     default_policy_snapshot, default_template_map_snapshot, rework_budgets_from_policy_snapshot,
 };
+use ingot_usecases::{UseCaseError, application::ApplicationInfraPort};
 
 use crate::error::ApiError;
 use crate::router::AppState;
-use crate::router::infra_ports::HttpInfraAdapter;
 use crate::router::support::errors::{ensure_git_valid_target_ref, target_ref_parse_to_api_error};
 use crate::router::types::ReviseItemRequest;
 
@@ -108,11 +107,14 @@ fn build_superseding_policy_snapshot(
     }
 }
 
-pub(in crate::router) async fn validate_seed_commit_oid(
-    infra: &HttpInfraAdapter,
+pub(in crate::router) async fn validate_seed_commit_oid<I>(
+    infra: &I,
     project_id: ProjectId,
     seed_commit_oid: Option<CommitOid>,
-) -> Result<Option<CommitOid>, ApiError> {
+) -> Result<Option<CommitOid>, ApiError>
+where
+    I: ApplicationInfraPort,
+{
     match seed_commit_oid {
         Some(seed_commit_oid) => {
             ensure_reachable_seed(infra, project_id, "seed_commit_oid", &seed_commit_oid).await?;
@@ -122,12 +124,15 @@ pub(in crate::router) async fn validate_seed_commit_oid(
     }
 }
 
-pub(in crate::router) async fn resolve_seed_target_commit_oid(
-    infra: &HttpInfraAdapter,
+pub(in crate::router) async fn resolve_seed_target_commit_oid<I>(
+    infra: &I,
     project_id: ProjectId,
     seed_target_commit_oid: Option<CommitOid>,
     default_seed_target_commit_oid: CommitOid,
-) -> Result<CommitOid, ApiError> {
+) -> Result<CommitOid, ApiError>
+where
+    I: ApplicationInfraPort,
+{
     match seed_target_commit_oid {
         Some(seed_target_commit_oid) => {
             ensure_reachable_seed(
@@ -143,12 +148,15 @@ pub(in crate::router) async fn resolve_seed_target_commit_oid(
     }
 }
 
-async fn ensure_reachable_seed(
-    infra: &HttpInfraAdapter,
+async fn ensure_reachable_seed<I>(
+    infra: &I,
     project_id: ProjectId,
     seed_name: &str,
     commit_oid: &CommitOid,
-) -> Result<(), ApiError> {
+) -> Result<(), ApiError>
+where
+    I: ApplicationInfraPort,
+{
     let reachable = infra
         .is_commit_reachable_from_any_ref(project_id, commit_oid)
         .await?;

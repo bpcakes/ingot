@@ -40,7 +40,7 @@ import {
   triageOptions,
   triageStateLabel,
 } from './findingsPresentation'
-import { WORKFLOW_FINDINGS_COPY, type WorkflowFindingsCopy, type WorkflowVersion } from './workflowPresentation'
+import type { WorkflowFindingsCopy, WorkflowPresentationLookup, WorkflowVersion } from './workflowPresentation'
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -125,7 +125,7 @@ function AgentScopeSummary({ findings, copy }: { findings: Finding[]; copy: Work
     <div className="flex items-start gap-3 rounded-lg border border-dashed border-border/80 bg-muted/30 px-4 py-3">
       <BotIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 space-y-1.5 text-sm">
-        <p className="font-medium text-foreground">{copy.agentScopeTitle}</p>
+        <p className="font-medium text-foreground">{copy.agent_scope_title}</p>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
           {fixNow.length > 0 && (
             <span className="flex items-center gap-1.5">
@@ -149,7 +149,7 @@ function AgentScopeSummary({ findings, copy }: { findings: Finding[]; copy: Work
             <span>No findings in scope</span>
           )}
         </div>
-        {untriaged.length > 0 && <p className="text-xs text-amber-600 dark:text-amber-500">{copy.triageWarning}</p>}
+        {untriaged.length > 0 && <p className="text-xs text-amber-600 dark:text-amber-500">{copy.triage_warning}</p>}
       </div>
     </div>
   )
@@ -543,6 +543,7 @@ export function FindingsTable({
   jobs,
   linkedFindingItems,
   workflowVersion,
+  workflowPresentations,
   onTriage,
   onPromote,
   pendingFindingId,
@@ -551,6 +552,7 @@ export function FindingsTable({
   jobs: Job[]
   linkedFindingItems: LinkedFindingItemSummary[]
   workflowVersion: WorkflowVersion
+  workflowPresentations: WorkflowPresentationLookup
   onTriage: (findingId: string, payload: TriagePayload) => void
   onPromote?: (findingId: string, dispatchImmediately: boolean) => void
   pendingFindingId: string | null
@@ -559,8 +561,8 @@ export function FindingsTable({
   const latestGroup = groups.find((g) => g.isLatest)
   const historicalGroups = groups.filter((g) => !g.isLatest)
   const linkedFindingItemsByFindingId = new Map(linkedFindingItems.map((summary) => [summary.finding_id, summary]))
-  const copy = WORKFLOW_FINDINGS_COPY[workflowVersion]
-  const latestGroupCopy = findingsCopyForGroup(latestGroup, workflowVersion)
+  const copy = workflowPresentations[workflowVersion].findings_copy
+  const latestGroupCopy = findingsCopyForGroup(latestGroup, workflowVersion, workflowPresentations)
   const latestGroupTriageCopy = triageCopyForGroup(latestGroup, workflowVersion)
 
   if (findings.length === 0) return null
@@ -579,8 +581,8 @@ export function FindingsTable({
           <section className="space-y-3">
             <div className="flex items-center gap-2">
               <div className="h-5 w-1 rounded-full bg-foreground" />
-              <h3 className="text-sm font-semibold tracking-tight">{latestGroupCopy.currentSectionTitle}</h3>
-              <span className="text-xs text-muted-foreground">\u2014 {latestGroupCopy.currentSectionHint}</span>
+              <h3 className="text-sm font-semibold tracking-tight">{latestGroupCopy.current_section_title}</h3>
+              <span className="text-xs text-muted-foreground">— {latestGroupCopy.current_section_hint}</span>
             </div>
             <JobGroupHeader group={latestGroup} />
             {latestGroup.findings[0]?.investigation && (
@@ -608,10 +610,10 @@ export function FindingsTable({
           <Collapsible>
             <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
               <ChevronDownIcon className="size-4 shrink-0 transition-transform duration-200 group-data-[state=closed]:-rotate-90" />
-              <span className="font-medium">{copy.previousSectionTitle}</span>
+              <span className="font-medium">{copy.previous_section_title}</span>
               <span className="text-xs">
                 ({historicalGroups.reduce((sum, g) => sum + g.findings.length, 0)} findings from{' '}
-                {historicalGroups.length} {copy.previousSectionSummaryNoun}
+                {historicalGroups.length} {copy.previous_section_summary_noun}
                 {historicalGroups.length !== 1 ? 's' : ''})
               </span>
             </CollapsibleTrigger>

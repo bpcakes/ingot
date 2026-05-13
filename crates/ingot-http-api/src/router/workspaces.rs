@@ -38,18 +38,18 @@ pub(super) async fn reset_workspace_route(
     }): ApiPath<ProjectWorkspacePathParams>,
 ) -> Result<Json<Workspace>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
     let workspace = load_available_workspace(&state, project_id, workspace_id).await?;
     let infra = state.infra();
     let workspace =
-        ingot_usecases::workspace::reset_workspace(&state.db, &infra, project_id, &workspace)
+        ingot_usecases::workspace::reset_workspace(state.db(), &infra, project_id, &workspace)
             .await?;
 
     Ok(Json(workspace))
@@ -63,16 +63,16 @@ pub(super) async fn abandon_workspace_route(
     }): ApiPath<ProjectWorkspacePathParams>,
 ) -> Result<Json<Workspace>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
     let workspace = load_available_workspace(&state, project_id, workspace_id).await?;
-    let workspace = ingot_usecases::workspace::abandon_workspace(&state.db, &workspace).await?;
+    let workspace = ingot_usecases::workspace::abandon_workspace(state.db(), &workspace).await?;
     Ok(Json(workspace))
 }
 
@@ -84,19 +84,23 @@ pub(super) async fn remove_workspace_route(
     }): ApiPath<ProjectWorkspacePathParams>,
 ) -> Result<Json<Workspace>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
     let workspace = load_available_workspace(&state, project_id, workspace_id).await?;
     let infra = state.infra();
-    let workspace =
-        ingot_usecases::workspace::remove_workspace_full(&state.db, &infra, project_id, &workspace)
-            .await?;
+    let workspace = ingot_usecases::workspace::remove_workspace_full(
+        state.db(),
+        &infra,
+        project_id,
+        &workspace,
+    )
+    .await?;
 
     Ok(Json(workspace))
 }
@@ -107,7 +111,7 @@ async fn load_available_workspace(
     workspace_id: WorkspaceId,
 ) -> Result<Workspace, ApiError> {
     let workspace = state
-        .db
+        .db()
         .get_workspace(workspace_id)
         .await
         .map_err(repo_to_internal)?;
@@ -129,7 +133,7 @@ async fn ensure_workspace_has_no_active_jobs(
     workspace_id: WorkspaceId,
 ) -> Result<(), ApiError> {
     let jobs = state
-        .db
+        .db()
         .list_active_jobs()
         .await
         .map_err(repo_to_internal)?;

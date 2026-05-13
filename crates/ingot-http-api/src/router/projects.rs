@@ -21,6 +21,7 @@ use ingot_domain::job::Job;
 use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_domain::project::Project;
 use ingot_domain::workspace::Workspace;
+use ingot_usecases::application::ApplicationInfraPort;
 
 use crate::error::ApiError;
 
@@ -50,12 +51,12 @@ pub(super) async fn list_project_activity(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<Vec<Activity>>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let activity = state
-        .db
+        .db()
         .list_activity_by_project(
             project_id,
             query.limit.unwrap_or(50),
@@ -71,12 +72,12 @@ pub(super) async fn list_project_workspaces(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<Json<Vec<Workspace>>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let workspaces = state
-        .db
+        .db()
         .list_workspaces_by_project(project_id)
         .await
         .map_err(repo_to_internal)?;
@@ -86,7 +87,7 @@ pub(super) async fn list_project_workspaces(
 pub(super) async fn list_projects(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Project>>, ApiError> {
-    let projects = state.db.list_projects().await.map_err(repo_to_internal)?;
+    let projects = state.db().list_projects().await.map_err(repo_to_internal)?;
     Ok(Json(projects))
 }
 
@@ -111,7 +112,7 @@ pub(super) async fn create_project(
     };
 
     state
-        .db
+        .db()
         .create_project(&project)
         .await
         .map_err(repo_to_project_mutation)?;
@@ -126,11 +127,11 @@ pub(super) async fn update_project(
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<Project>, ApiError> {
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
     let existing = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
@@ -167,7 +168,7 @@ pub(super) async fn update_project(
     project.updated_at = Utc::now();
 
     state
-        .db
+        .db()
         .update_project(&project)
         .await
         .map_err(repo_to_project_mutation)?;
@@ -181,7 +182,7 @@ pub(super) async fn delete_project(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<StatusCode, ApiError> {
     state
-        .db
+        .db()
         .delete_project(project_id)
         .await
         .map_err(repo_to_project_mutation)?;
@@ -194,7 +195,7 @@ pub(super) async fn get_project_config(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<Json<IngotConfig>, ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
@@ -206,12 +207,12 @@ pub(super) async fn list_project_jobs(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let jobs = state
-        .db
+        .db()
         .list_jobs_by_project(project_id)
         .await
         .map_err(repo_to_internal)?;

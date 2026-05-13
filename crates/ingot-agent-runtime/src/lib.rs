@@ -52,10 +52,13 @@ mod job_support;
 mod preparation;
 pub(crate) mod reconciliation;
 mod runtime_ports;
+mod startup;
 mod supervisor;
 
 type AgentLaunchFuture<'a> =
     Pin<Box<dyn std::future::Future<Output = Result<AgentResponse, AgentError>> + Send + 'a>>;
+pub type RuntimeCompleteJobService =
+    CompleteJobService<Database, GitJobCompletionPort, ProjectLocks>;
 
 #[derive(Clone, Debug)]
 pub struct DispatcherConfig {
@@ -151,10 +154,26 @@ pub enum RuntimeError {
     InvalidState(String),
 }
 
+fn build_complete_job_service(
+    db: &Database,
+    project_locks: &ProjectLocks,
+    state_root: PathBuf,
+) -> RuntimeCompleteJobService {
+    CompleteJobService::with_repo_path_resolver(
+        db.clone(),
+        GitJobCompletionPort,
+        project_locks.clone(),
+        Arc::new(move |project: &Project| {
+            project_repo_paths_for_project(state_root.as_path(), project).mirror_git_dir
+        }),
+    )
+}
+
 #[derive(Clone)]
 pub struct JobDispatcher {
     db: Database,
     project_locks: ProjectLocks,
+    complete_job_service: RuntimeCompleteJobService,
     config: DispatcherConfig,
     lease_owner_id: LeaseOwnerId,
     runner: Arc<dyn AgentRunner>,
@@ -197,6 +216,25 @@ impl JobDispatcher {
         )
     }
 
+    pub fn new_with_complete_job_service_and_events(
+        db: Database,
+        project_locks: ProjectLocks,
+        complete_job_service: RuntimeCompleteJobService,
+        config: DispatcherConfig,
+        dispatch_notify: DispatchNotify,
+        ui_events: UiEventBus,
+    ) -> Self {
+        Self::with_runner_complete_job_service_and_events(
+            db,
+            project_locks,
+            complete_job_service,
+            config,
+            Arc::new(CliAgentRunner),
+            dispatch_notify,
+            ui_events,
+        )
+    }
+
     pub fn with_runner(
         db: Database,
         project_locks: ProjectLocks,
@@ -222,9 +260,32 @@ impl JobDispatcher {
         dispatch_notify: DispatchNotify,
         ui_events: UiEventBus,
     ) -> Self {
+        let complete_job_service =
+            build_complete_job_service(&db, &project_locks, config.state_root.clone());
+        Self::with_runner_complete_job_service_and_events(
+            db,
+            project_locks,
+            complete_job_service,
+            config,
+            runner,
+            dispatch_notify,
+            ui_events,
+        )
+    }
+
+    fn with_runner_complete_job_service_and_events(
+        db: Database,
+        project_locks: ProjectLocks,
+        complete_job_service: RuntimeCompleteJobService,
+        config: DispatcherConfig,
+        runner: Arc<dyn AgentRunner>,
+        dispatch_notify: DispatchNotify,
+        ui_events: UiEventBus,
+    ) -> Self {
         Self {
             db,
             project_locks,
+            complete_job_service,
             config,
             lease_owner_id: LeaseOwnerId::new(format!("ingotd:{}", std::process::id())),
             runner,
@@ -292,18 +353,8 @@ impl JobDispatcher {
         Ok(convergence.target_head_valid_for_resolved_oid(resolved.as_ref()))
     }
 
-    fn complete_job_service(
-        &self,
-    ) -> CompleteJobService<Database, GitJobCompletionPort, ProjectLocks> {
-        let state_root = self.config.state_root.clone();
-        CompleteJobService::with_repo_path_resolver(
-            self.db.clone(),
-            GitJobCompletionPort,
-            self.project_locks.clone(),
-            Arc::new(move |project: &Project| {
-                project_repo_paths_for_project(state_root.as_path(), project).mirror_git_dir
-            }),
-        )
+    fn complete_job_service(&self) -> &RuntimeCompleteJobService {
+        &self.complete_job_service
     }
 
     async fn append_activity(

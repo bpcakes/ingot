@@ -37,6 +37,7 @@ export type OutcomeClass =
   | 'protocol_violation'
   | 'cancelled'
 export type PhaseKind = 'author' | 'validate' | 'review' | 'investigate' | 'system'
+export type WorkflowVersion = 'delivery:v1' | 'investigation:v1'
 export type PhaseStatus =
   | 'done'
   | 'running'
@@ -222,7 +223,7 @@ export interface Item {
   id: string
   project_id: string
   classification: Classification
-  workflow_version: 'delivery:v1' | 'investigation:v1'
+  workflow_version: WorkflowVersion
   lifecycle_state: LifecycleState
   parking_state: ParkingState
   done_reason?: DoneReason
@@ -240,6 +241,33 @@ export interface Item {
   created_at: string
   updated_at: string
   closed_at?: string
+}
+
+export interface WorkflowStepPresentation {
+  id: string
+  label: string
+  phase: PhaseKind
+}
+
+export interface WorkflowPhasePresentation {
+  id: string
+  label: string
+  steps: WorkflowStepPresentation[]
+}
+
+export interface WorkflowFindingsCopy {
+  agent_scope_title: string
+  current_section_title: string
+  current_section_hint: string
+  previous_section_title: string
+  previous_section_summary_noun: string
+  triage_warning: string
+}
+
+export interface WorkflowPresentation {
+  version: WorkflowVersion
+  phases: WorkflowPhasePresentation[]
+  findings_copy: WorkflowFindingsCopy
 }
 
 export interface ItemRevision {
@@ -415,6 +443,7 @@ export interface RevisionContextSummary {
 
 export interface ItemDetail {
   item: Item
+  workflow_presentations: WorkflowPresentation[]
   execution_mode: ExecutionMode
   current_revision: ItemRevision
   evaluation: Evaluation

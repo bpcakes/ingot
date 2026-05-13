@@ -15,7 +15,7 @@ use ingot_domain::project::{AgentRouting, AutoTriagePolicy, ExecutionMode};
 use ingot_domain::revision::{ApprovalPolicy, ItemRevision};
 use ingot_domain::revision_context::RevisionContextSummary;
 use ingot_domain::workspace::Workspace;
-use ingot_workflow::{BoardStatus, Evaluation};
+use ingot_workflow::{BoardStatus, Evaluation, WorkflowPresentation};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
@@ -70,6 +70,7 @@ pub struct QueueStatusResponse {
 #[derive(Debug, Serialize)]
 pub struct ItemDetailResponse {
     pub item: Item,
+    pub workflow_presentations: &'static [WorkflowPresentation],
     pub execution_mode: ExecutionMode,
     pub current_revision: ItemRevision,
     pub evaluation: Evaluation,

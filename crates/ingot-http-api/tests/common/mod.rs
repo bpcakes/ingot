@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use ingot_app::ApplicationServices;
 #[allow(unused_imports)]
 pub use ingot_domain::test_support::{DEFAULT_TEST_TIMESTAMP, parse_timestamp};
 use ingot_store_sqlite::Database;
@@ -32,12 +33,27 @@ pub const TS: &str = DEFAULT_TEST_TIMESTAMP;
 /// Build a router with an isolated temp state root (avoids production `$HOME/.ingot`).
 pub fn test_router(db: Database) -> axum::Router {
     let state_root = temp_state_root("ingot-http-api-state");
-    ingot_http_api::build_router_with_project_locks_and_state_root(
+    build_router_with_project_locks_and_state_root(
         db,
         ProjectLocks::default(),
         state_root,
         DispatchNotify::default(),
     )
+}
+
+pub fn build_router_with_project_locks_and_state_root(
+    db: Database,
+    project_locks: ProjectLocks,
+    state_root: PathBuf,
+    dispatch_notify: DispatchNotify,
+) -> axum::Router {
+    ingot_http_api::build_router_with_services(ApplicationServices::new(
+        db,
+        project_locks,
+        state_root,
+        dispatch_notify,
+        ingot_usecases::UiEventBus::default(),
+    ))
 }
 
 pub fn expect_status(response: Response, expected: StatusCode) -> Response {

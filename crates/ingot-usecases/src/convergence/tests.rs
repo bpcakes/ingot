@@ -1,19 +1,26 @@
 use chrono::Utc;
 use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId};
-use ingot_domain::test_support::{ItemBuilder, ProjectBuilder, RevisionBuilder};
+use ingot_domain::test_support::{
+    ConvergenceBuilder, ItemBuilder, ProjectBuilder, RevisionBuilder,
+};
 use ingot_test_support::git::unique_temp_path;
 use uuid::Uuid;
 
 use crate::UseCaseError;
 
-use super::test_support::{FakePort, fake_completed_validate_job, project_state};
+use super::test_support::{FakePort, project_state};
 use super::{
-    ApprovalFinalizeReadiness, ConvergenceQueuePrepareContext, ConvergenceService,
-    FinalizeTargetRefResult,
+    ConvergenceService, FinalizePreparedTrigger, FinalizeTargetRefResult,
+    finalize_prepared_convergence,
 };
 
-#[tokio::test]
-async fn queue_prepare_creates_lane_head_when_lane_is_empty() {
+fn prepared_finalization_parts() -> (
+    ingot_domain::project::Project,
+    ingot_domain::item::Item,
+    ingot_domain::revision::ItemRevision,
+    ingot_domain::convergence::Convergence,
+    ingot_domain::convergence_queue::ConvergenceQueueEntry,
+) {
     let now = Utc::now();
     let project_id = ProjectId::from_uuid(Uuid::nil());
     let item_id = ItemId::from_uuid(Uuid::nil());
@@ -28,33 +35,43 @@ async fn queue_prepare_creates_lane_head_when_lane_is_empty() {
         .build();
     let revision = RevisionBuilder::new(item_id)
         .id(revision_id)
-        .explicit_seed("seed")
+        .explicit_seed("abc123")
         .created_at(now)
         .build();
-    let port = FakePort::with_queue_prepare_context(ConvergenceQueuePrepareContext {
-        project,
-        item,
-        revision,
-        jobs: vec![fake_completed_validate_job("prepare_convergence")],
-        findings: vec![],
-        convergences: vec![],
-        active_queue_entry: None,
-        lane_head: None,
-    });
-    let service = ConvergenceService::new(port.clone());
+    let convergence = ConvergenceBuilder::new(project_id, item_id, revision_id)
+        .id(ingot_domain::ids::ConvergenceId::from_uuid(Uuid::nil()))
+        .status(ingot_domain::convergence::ConvergenceStatus::Prepared)
+        .target_head_valid(true)
+        .created_at(now)
+        .build();
+    let queue_entry = ingot_domain::convergence_queue::ConvergenceQueueEntry {
+        id: ingot_domain::ids::ConvergenceQueueEntryId::from_uuid(Uuid::nil()),
+        project_id,
+        item_id,
+        item_revision_id: revision_id,
+        target_ref: "refs/heads/main".into(),
+        status: ingot_domain::convergence_queue::ConvergenceQueueEntryStatus::Head,
+        head_acquired_at: Some(now),
+        created_at: now,
+        updated_at: now,
+        released_at: None,
+    };
 
-    service
-        .queue_prepare(project_id, item_id)
-        .await
-        .expect("queue prepare");
+    (project, item, revision, convergence, queue_entry)
+}
 
-    let calls = port.calls();
-    assert!(calls.iter().any(|call| call.starts_with("create_queue:")));
-    assert!(
-        calls
-            .iter()
-            .any(|call| call == "activity:ConvergenceQueued")
-    );
+async fn finalize_with(port: &FakePort) -> Result<(), UseCaseError> {
+    let (project, item, revision, convergence, queue_entry) = prepared_finalization_parts();
+    finalize_prepared_convergence(
+        port,
+        FinalizePreparedTrigger::ApprovalCommand,
+        &project,
+        &item,
+        &revision,
+        &convergence,
+        &queue_entry,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -138,38 +155,15 @@ async fn blocked_auto_finalize_allows_later_system_action_to_run() {
 }
 
 #[tokio::test]
-async fn approve_item_returns_stale_when_readiness_is_stale() {
-    let mut context = FakePort::default_approval_context();
-    context.finalize_readiness = ApprovalFinalizeReadiness::PreparedConvergenceStale;
-    let port = FakePort::with_approval_context(context);
-    let service = ConvergenceService::new(port);
-
-    let error = service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
-        .await
-        .expect_err("approval should reject stale convergence");
-
-    assert!(matches!(error, UseCaseError::PreparedConvergenceStale));
-}
-
-#[tokio::test]
 async fn approve_item_uses_shared_finalizer_for_already_finalized_target() {
     let port = FakePort {
         finalize_target_ref_result: FinalizeTargetRefResult::AlreadyFinalized,
-        ..FakePort::with_approval_context(FakePort::default_approval_context())
+        ..FakePort::with_projects(Vec::new())
     };
-    let service = ConvergenceService::new(port.clone());
 
-    service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
+    finalize_with(&port)
         .await
-        .expect("approval should finalize");
+        .expect("finalization should complete");
 
     let calls = port.calls();
     assert!(
@@ -198,17 +192,12 @@ async fn approve_item_leaves_finalize_unresolved_when_checkout_sync_stays_blocke
         checkout_finalization_readiness: super::CheckoutFinalizationReadiness::Blocked {
             message: "registered checkout blocked".into(),
         },
-        ..FakePort::with_approval_context(FakePort::default_approval_context())
+        ..FakePort::with_projects(Vec::new())
     };
-    let service = ConvergenceService::new(port.clone());
 
-    service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
+    finalize_with(&port)
         .await
-        .expect("approval should finalize even when checkout sync stays blocked");
+        .expect("finalization should advance target even when checkout sync stays blocked");
 
     let calls = port.calls();
     assert!(calls.iter().any(|call| call == "update_op:Applied"));
@@ -231,17 +220,12 @@ async fn approve_item_keeps_finalize_operation_unresolved_when_sync_retry_fails(
     let port = FakePort {
         checkout_finalization_readiness: super::CheckoutFinalizationReadiness::NeedsSync,
         sync_checkout_should_fail: true,
-        ..FakePort::with_approval_context(FakePort::default_approval_context())
+        ..FakePort::with_projects(Vec::new())
     };
-    let service = ConvergenceService::new(port.clone());
 
-    service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
+    finalize_with(&port)
         .await
-        .expect("approval should succeed even when sync retry fails");
+        .expect("finalization should keep operation unresolved when sync retry fails");
 
     let calls = port.calls();
     assert!(calls.iter().any(|call| call == "update_op:Applied"));
@@ -263,15 +247,10 @@ async fn approve_item_keeps_finalize_operation_unresolved_when_sync_retry_fails(
 async fn approve_item_surfaces_checkout_readiness_failures_after_finalize() {
     let port = FakePort {
         checkout_finalization_readiness_error: Some("git inspection failed".into()),
-        ..FakePort::with_approval_context(FakePort::default_approval_context())
+        ..FakePort::with_projects(Vec::new())
     };
-    let service = ConvergenceService::new(port.clone());
 
-    let error = service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
+    let error = finalize_with(&port)
         .await
         .expect_err("approval should surface checkout readiness failures");
 
@@ -297,15 +276,10 @@ async fn approve_item_keeps_finalize_operation_unresolved_when_target_ref_advanc
  {
     let port = FakePort {
         apply_finalization_mutation_should_fail: true,
-        ..FakePort::with_approval_context(FakePort::default_approval_context())
+        ..FakePort::with_projects(Vec::new())
     };
-    let service = ConvergenceService::new(port.clone());
 
-    let error = service
-        .approve_item(
-            ProjectId::from_uuid(Uuid::nil()),
-            ItemId::from_uuid(Uuid::nil()),
-        )
+    let error = finalize_with(&port)
         .await
         .expect_err("approval should surface persistence failure");
 

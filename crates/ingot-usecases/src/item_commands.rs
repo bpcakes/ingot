@@ -25,9 +25,7 @@ use crate::item::{
     create_investigation_item, create_manual_item, default_policy_snapshot,
     default_template_map_snapshot, next_sort_key, rework_budgets_from_policy_snapshot,
 };
-use crate::store::{
-    ItemRevisionMutationStore, ProjectedReviewDispatchStore, ReopenItemStore, ResumeItemStore,
-};
+use crate::store::{ItemRuntimeSnapshotStore, RevisionLaneTeardownSideEffectStore};
 
 #[derive(Clone, Debug)]
 pub struct CreateItemCommand {
@@ -226,7 +224,10 @@ pub async fn revise_item<R, I, L>(
     command: ReviseItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ItemRevisionMutationStore,
+    R: ProjectRepository
+        + RevisionRepository
+        + ActivityRepository
+        + RevisionLaneTeardownSideEffectStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -290,7 +291,10 @@ pub async fn defer_item<R, I, L>(
     item_id: ItemId,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ItemRevisionMutationStore,
+    R: ProjectRepository
+        + RevisionRepository
+        + ActivityRepository
+        + RevisionLaneTeardownSideEffectStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -334,7 +338,12 @@ pub async fn resume_item<R, I, L>(
     item_id: ItemId,
 ) -> Result<(ItemCommandOutput, AutoDispatchResult), UseCaseError>
 where
-    R: ResumeItemStore,
+    R: ProjectRepository
+        + ItemRepository
+        + JobRepository
+        + WorkspaceRepository
+        + ActivityRepository
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -374,7 +383,10 @@ pub async fn finish_item_manually<R, I, L>(
     event_type: ActivityEventType,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ItemRevisionMutationStore,
+    R: ProjectRepository
+        + RevisionRepository
+        + ActivityRepository
+        + RevisionLaneTeardownSideEffectStore,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -419,7 +431,12 @@ pub async fn reopen_item<R, I, L>(
     command: ReviseItemCommand,
 ) -> Result<ItemCommandOutput, UseCaseError>
 where
-    R: ReopenItemStore,
+    R: ProjectRepository
+        + ItemRepository
+        + RevisionRepository
+        + JobRepository
+        + WorkspaceRepository
+        + ActivityRepository,
     I: ApplicationInfraPort,
     L: ProjectMutationLockPort,
 {
@@ -493,7 +510,11 @@ pub async fn auto_dispatch_projected_review_job<R, I>(
     item_id: ItemId,
 ) -> AutoDispatchResult
 where
-    R: ProjectedReviewDispatchStore,
+    R: ItemRepository
+        + JobRepository
+        + WorkspaceRepository
+        + ActivityRepository
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort,
 {
     let item = <R as ItemRepository>::get(repo, item_id)

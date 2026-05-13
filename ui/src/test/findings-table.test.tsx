@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { FindingsTable } from '../components/item-detail/FindingsTable'
 import { TooltipProvider } from '../components/ui/tooltip'
 import type { Finding, Job, LinkedFindingItemSummary } from '../types/domain'
+import { testWorkflowPresentationLookup } from './workflowPresentationFixture'
 
 function renderFindingsTable(props: {
   findings: Finding[]
@@ -24,6 +25,7 @@ function renderFindingsTable(props: {
           onPromote={props.onPromote ?? (() => {})}
           onTriage={props.onTriage ?? (() => {})}
           pendingFindingId={null}
+          workflowPresentations={testWorkflowPresentationLookup}
         />
       </TooltipProvider>
     </MemoryRouter>,

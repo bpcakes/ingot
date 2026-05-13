@@ -76,15 +76,15 @@ pub(super) async fn create_item(
     Json(request): Json<CreateItemRequest>,
 ) -> Result<(StatusCode, Json<ItemDetailResponse>), ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let config = load_effective_config(Some(&project))?;
     let output = item_uc::create_item(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         item_uc::CreateItemCommand {
             project_id,
             title: request.title,
@@ -114,12 +114,12 @@ pub(super) async fn list_items(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<Json<Vec<ItemSummaryResponse>>, ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let items = state
-        .db
+        .db()
         .list_items_by_project(project_id)
         .await
         .map_err(repo_to_internal)?;
@@ -153,8 +153,8 @@ pub(super) async fn update_item(
     Json(request): Json<UpdateItemRequest>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
     let output = item_uc::update_item(
-        &state.db,
-        &state.project_locks,
+        state.db(),
+        state.project_locks(),
         item_uc::UpdateItemCommand {
             project_id,
             item_id,
@@ -177,7 +177,7 @@ pub(super) async fn get_item(
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
@@ -197,9 +197,9 @@ pub(super) async fn revise_item(
         .map(|Json(request)| request)
         .unwrap_or_default();
     let output = item_uc::revise_item(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         project_id,
         item_id,
         revise_command(request),
@@ -217,9 +217,9 @@ pub(super) async fn defer_item(
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
     let output = item_uc::defer_item(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         project_id,
         item_id,
     )
@@ -236,9 +236,9 @@ pub(super) async fn resume_item(
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
     let (output, dispatch_result) = item_uc::resume_item(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         project_id,
         item_id,
     )
@@ -301,9 +301,9 @@ pub(super) async fn reopen_item(
         .map(|Json(request)| request)
         .unwrap_or_default();
     let output = item_uc::reopen_item(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         project_id,
         item_id,
         revise_command(request),
@@ -321,50 +321,22 @@ pub(super) async fn list_item_findings(
     }): ApiPath<ProjectItemPathParams>,
 ) -> Result<Json<Vec<Finding>>, ApiError> {
     state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
+    let item = state.db().get_item(item_id).await.map_err(repo_to_item)?;
     if item.project_id != project_id {
         return Err(UseCaseError::ItemNotFound.into());
     }
 
     let findings = state
-        .db
+        .db()
         .list_findings_by_item(item_id)
         .await
         .map_err(repo_to_internal)?;
 
     Ok(Json(findings))
-}
-
-#[derive(Default)]
-#[allow(dead_code)]
-pub(crate) struct RevisionLaneTeardown {
-    pub(super) cancelled_job_ids: Vec<String>,
-    pub(super) cancelled_convergence_ids: Vec<String>,
-    pub(super) cancelled_queue_entry_ids: Vec<String>,
-    pub(super) reconciled_prepare_operation_ids: Vec<String>,
-    pub(super) failed_finalize_operation_ids: Vec<String>,
-}
-
-impl RevisionLaneTeardown {
-    pub(super) fn has_cancelled_convergence(&self) -> bool {
-        !self.cancelled_convergence_ids.is_empty()
-    }
-
-    pub(super) fn has_cancelled_queue_entry(&self) -> bool {
-        !self.cancelled_queue_entry_ids.is_empty()
-    }
-
-    pub(super) fn first_cancelled_convergence_id(&self) -> Option<&str> {
-        self.cancelled_convergence_ids.first().map(String::as_str)
-    }
-
-    pub(super) fn first_cancelled_queue_entry_id(&self) -> Option<&str> {
-        self.cancelled_queue_entry_ids.first().map(String::as_str)
-    }
 }
 
 pub(super) async fn finish_item_manually(
@@ -375,9 +347,9 @@ pub(super) async fn finish_item_manually(
     event_type: ActivityEventType,
 ) -> Result<Json<ItemDetailResponse>, ApiError> {
     let output = item_uc::finish_item_manually(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         project_id,
         item_id,
         done_reason,
@@ -406,7 +378,7 @@ pub(super) async fn current_authoring_head_for_revision_with_workspace(
     jobs: &[Job],
 ) -> Result<Option<CommitOid>, ApiError> {
     let workspace = state
-        .db
+        .db()
         .find_authoring_workspace_for_revision(revision.id)
         .await
         .map_err(repo_to_internal)?;
@@ -424,7 +396,7 @@ pub(super) async fn effective_authoring_base_commit_oid(
     revision: &ItemRevision,
 ) -> Result<Option<CommitOid>, ApiError> {
     let workspace = state
-        .db
+        .db()
         .find_authoring_workspace_for_revision(revision.id)
         .await
         .map_err(repo_to_internal)?;

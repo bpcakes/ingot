@@ -57,7 +57,7 @@ async fn logs_route_returns_normalized_output_and_raw_route_returns_raw_artifact
     .await
     .expect("write result");
 
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         ingot_usecases::ProjectLocks::default(),
         PathBuf::from(&state_root),
@@ -107,7 +107,7 @@ async fn logs_route_falls_back_to_raw_artifacts_when_normalized_output_is_missin
         .await
         .expect("write stderr");
 
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         ingot_usecases::ProjectLocks::default(),
         PathBuf::from(&state_root),
@@ -167,7 +167,7 @@ async fn logs_route_keeps_empty_output_artifact_for_running_jobs() {
         .await
         .expect("write empty output jsonl");
 
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         ingot_usecases::ProjectLocks::default(),
         PathBuf::from(&state_root),
@@ -234,7 +234,7 @@ async fn logs_route_falls_back_to_raw_artifacts_for_terminal_jobs_when_output_ar
     )
     .await;
 
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         ingot_usecases::ProjectLocks::default(),
         PathBuf::from(&state_root),

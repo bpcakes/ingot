@@ -8,23 +8,8 @@ use ingot_git::commands::{
     GitCommandError, check_ref_format, current_branch_name, resolve_ref_oid,
 };
 use ingot_usecases::{CompleteJobError, UseCaseError, UseCaseInfraError};
-use ingot_workspace::WorkspaceError;
 
 use crate::error::ApiError;
-
-pub(crate) fn workspace_to_usecase_error(error: WorkspaceError) -> UseCaseError {
-    match error {
-        error @ WorkspaceError::Busy => UseCaseInfraError::workspace_busy(error).into(),
-        error @ WorkspaceError::MissingInputHeadCommitOid => {
-            UseCaseInfraError::workspace_invalid_state(error).into()
-        }
-        error @ (WorkspaceError::WorkspaceRefMismatch { .. }
-        | WorkspaceError::WorkspaceHeadMismatch { .. }) => {
-            UseCaseInfraError::workspace_state_mismatch(error).into()
-        }
-        other => UseCaseInfraError::external("workspace", other).into(),
-    }
-}
 
 pub(crate) fn ensure_workspace_not_busy(workspace: &Workspace) -> Result<(), ApiError> {
     if workspace.state.status() == WorkspaceStatus::Busy {
@@ -75,24 +60,10 @@ pub(crate) fn repo_to_item(error: RepositoryError) -> ApiError {
     }
 }
 
-pub(crate) fn repo_to_item_usecase(error: RepositoryError) -> UseCaseError {
-    match error {
-        RepositoryError::NotFound => UseCaseError::ItemNotFound,
-        other => UseCaseError::Repository(other),
-    }
-}
-
 pub(crate) fn repo_to_project(error: RepositoryError) -> ApiError {
     match error {
         RepositoryError::NotFound => UseCaseError::ProjectNotFound.into(),
         other => ApiError::from(UseCaseError::Repository(other)),
-    }
-}
-
-pub(crate) fn repo_to_project_usecase(error: RepositoryError) -> UseCaseError {
-    match error {
-        RepositoryError::NotFound => UseCaseError::ProjectNotFound,
-        other => UseCaseError::Repository(other),
     }
 }
 
@@ -177,18 +148,6 @@ pub(crate) async fn ensure_git_valid_target_ref(target_ref: &str) -> Result<(), 
     {
         true => Ok(()),
         false => Err(UseCaseError::InvalidTargetRef(target_ref.into()).into()),
-    }
-}
-
-pub(crate) async fn ensure_git_valid_target_ref_usecase(
-    target_ref: &str,
-) -> Result<(), UseCaseError> {
-    match check_ref_format(target_ref)
-        .await
-        .map_err(git_to_usecase_error)?
-    {
-        true => Ok(()),
-        false => Err(UseCaseError::InvalidTargetRef(target_ref.into())),
     }
 }
 

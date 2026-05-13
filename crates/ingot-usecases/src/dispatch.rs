@@ -644,8 +644,6 @@ use ingot_workflow::{ClosureRelevance, Evaluator, step};
 use crate::UseCaseError;
 use crate::authoring_history::build_candidate_subject_input;
 use crate::git_operation_journal::{create_planned, mark_applied};
-use crate::store::{AutoDispatchStore, DispatchStore};
-
 pub use planning::{DispatchJobCommand, dispatch_job, retry_job};
 
 pub trait DispatchInfraPort: Send + Sync {
@@ -775,7 +773,7 @@ pub async fn apply_pending_investigation_ref_or_cleanup<S, G>(
     precreated_workspace: Option<&Workspace>,
 ) -> Result<(), UseCaseError>
 where
-    S: DispatchStore,
+    S: JobRepository + WorkspaceRepository + GitOperationRepository + ActivityRepository,
     G: DispatchInfraPort,
 {
     let Some(pending_ref) = pending_ref else {
@@ -1095,7 +1093,7 @@ pub async fn prepare_and_persist_dispatched_job<S, G>(
     activity: DispatchActivityContext,
 ) -> Result<PreparedDispatchedJob, UseCaseError>
 where
-    S: DispatchStore,
+    S: JobRepository + WorkspaceRepository + GitOperationRepository + ActivityRepository,
     G: DispatchInfraPort,
 {
     ensure_dispatch_context_matches(project, item, revision, &job)?;
@@ -1368,7 +1366,7 @@ pub async fn auto_dispatch_review<S>(
     convergences: &[Convergence],
 ) -> Result<Option<Job>, UseCaseError>
 where
-    S: AutoDispatchStore,
+    S: JobRepository + WorkspaceRepository + ActivityRepository,
 {
     auto_dispatch_closure_relevant_step(
         store,
@@ -1403,7 +1401,7 @@ pub async fn auto_dispatch_validation<S>(
     convergences: &[Convergence],
 ) -> Result<Option<Job>, UseCaseError>
 where
-    S: AutoDispatchStore,
+    S: JobRepository + WorkspaceRepository + ActivityRepository,
 {
     auto_dispatch_closure_relevant_step(
         store,
@@ -1439,7 +1437,7 @@ pub async fn auto_dispatch_autopilot<S>(
     author_initial_head_commit_oid: Option<CommitOid>,
 ) -> Result<Option<Job>, UseCaseError>
 where
-    S: AutoDispatchStore,
+    S: JobRepository + WorkspaceRepository + ActivityRepository,
 {
     let evaluation = Evaluator::new().evaluate(item, revision, jobs, findings, convergences);
     let Some(step_id) = evaluation.dispatchable_step_id else {

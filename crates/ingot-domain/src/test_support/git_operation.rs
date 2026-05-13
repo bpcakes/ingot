@@ -112,8 +112,7 @@ impl GitOperationBuilder {
                 expected_old_oid: self
                     .expected_old_oid
                     .expect("CreateJobCommit requires expected_old_oid"),
-                new_oid: self.new_oid,
-                commit_oid: self.commit_oid,
+                commit_oid: self.commit_oid.or(self.new_oid),
             },
             OperationKind::PrepareConvergenceCommit => OperationPayload::PrepareConvergenceCommit {
                 workspace_id: self
@@ -123,8 +122,7 @@ impl GitOperationBuilder {
                 expected_old_oid: self
                     .expected_old_oid
                     .expect("PrepareConvergenceCommit requires expected_old_oid"),
-                new_oid: self.new_oid,
-                commit_oid: self.commit_oid,
+                commit_oid: self.commit_oid.or(self.new_oid),
                 replay_metadata,
             },
             OperationKind::FinalizeTargetRef => OperationPayload::FinalizeTargetRef {

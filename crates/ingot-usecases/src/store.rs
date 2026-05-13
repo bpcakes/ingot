@@ -6,10 +6,10 @@ use ingot_domain::git_operation::GitOperation;
 use ingot_domain::ids::{ItemId, ItemRevisionId, WorkspaceId};
 use ingot_domain::job::Job;
 use ingot_domain::ports::{
-    ActivityRepository, ConvergenceQueueRepository, ConvergenceRepository, FindingRepository,
-    GitOperationRepository, ItemRepository, JobRepository, ProjectRepository, RepositoryError,
-    RevisionContextRepository, RevisionLaneTeardownMutation, RevisionLaneTeardownRepository,
-    RevisionRepository, WorkspaceRepository,
+    ConvergenceQueueRepository, ConvergenceRepository, FindingRepository, GitOperationRepository,
+    ItemRepository, JobRepository, ProjectRepository, RepositoryError, RevisionContextRepository,
+    RevisionLaneTeardownMutation, RevisionLaneTeardownRepository, RevisionRepository,
+    WorkspaceRepository,
 };
 use ingot_domain::workspace::Workspace;
 
@@ -61,79 +61,6 @@ pub trait RevisionLaneTeardownStore: Send + Sync {
 
 pub trait RevisionLaneTeardownSideEffectStore:
     RevisionLaneTeardownStore + ItemRepository + RevisionContextStore
-{
-}
-
-pub trait DispatchStore:
-    JobRepository + WorkspaceRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-pub trait AutoDispatchStore: JobRepository + WorkspaceRepository + ActivityRepository {}
-
-pub trait ItemRevisionMutationStore:
-    ProjectRepository
-    + ItemRepository
-    + RevisionRepository
-    + JobRepository
-    + WorkspaceRepository
-    + ActivityRepository
-    + RevisionLaneTeardownSideEffectStore
-{
-}
-
-pub trait ResumeItemStore:
-    ProjectRepository + ItemRepository + ActivityRepository + ProjectedReviewDispatchStore
-{
-}
-
-pub trait ReopenItemStore:
-    ProjectRepository
-    + ItemRepository
-    + RevisionRepository
-    + JobRepository
-    + WorkspaceRepository
-    + ActivityRepository
-{
-}
-
-pub trait ProjectedReviewDispatchStore:
-    ItemRepository + ItemRuntimeSnapshotStore + AutoDispatchStore
-{
-}
-
-pub trait ApplyFindingTriageStore:
-    ProjectRepository
-    + ItemRepository
-    + RevisionRepository
-    + JobRepository
-    + FindingRepository
-    + ActivityRepository
-    + ProjectedReviewDispatchStore
-    + GitOperationRepository
-{
-}
-
-pub trait PromoteFindingStore: ApplyFindingTriageStore + DispatchStore {}
-
-pub trait BatchPromoteFindingsStore:
-    ProjectRepository
-    + FindingRepository
-    + ItemRepository
-    + RevisionRepository
-    + JobRepository
-    + ActivityRepository
-{
-}
-
-pub trait JobWorkflowStore:
-    JobRepository
-    + ItemRepository
-    + ProjectRepository
-    + ActivityRepository
-    + ApplicationJobContextStore
-    + ItemRuntimeSnapshotStore
-    + AutoDispatchStore
 {
 }
 
@@ -209,78 +136,5 @@ where
 
 impl<T> RevisionLaneTeardownSideEffectStore for T where
     T: RevisionLaneTeardownStore + ItemRepository + RevisionContextStore
-{
-}
-
-impl<T> DispatchStore for T where
-    T: JobRepository + WorkspaceRepository + GitOperationRepository + ActivityRepository
-{
-}
-
-impl<T> AutoDispatchStore for T where T: JobRepository + WorkspaceRepository + ActivityRepository {}
-
-impl<T> ItemRevisionMutationStore for T where
-    T: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + WorkspaceRepository
-        + ActivityRepository
-        + RevisionLaneTeardownSideEffectStore
-{
-}
-
-impl<T> ResumeItemStore for T where
-    T: ProjectRepository + ItemRepository + ActivityRepository + ProjectedReviewDispatchStore
-{
-}
-
-impl<T> ReopenItemStore for T where
-    T: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + WorkspaceRepository
-        + ActivityRepository
-{
-}
-
-impl<T> ProjectedReviewDispatchStore for T where
-    T: ItemRepository + ItemRuntimeSnapshotStore + AutoDispatchStore
-{
-}
-
-impl<T> ApplyFindingTriageStore for T where
-    T: ProjectRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + FindingRepository
-        + ActivityRepository
-        + ProjectedReviewDispatchStore
-        + GitOperationRepository
-{
-}
-
-impl<T> PromoteFindingStore for T where T: ApplyFindingTriageStore + DispatchStore {}
-
-impl<T> BatchPromoteFindingsStore for T where
-    T: ProjectRepository
-        + FindingRepository
-        + ItemRepository
-        + RevisionRepository
-        + JobRepository
-        + ActivityRepository
-{
-}
-
-impl<T> JobWorkflowStore for T where
-    T: JobRepository
-        + ItemRepository
-        + ProjectRepository
-        + ActivityRepository
-        + ApplicationJobContextStore
-        + ItemRuntimeSnapshotStore
-        + AutoDispatchStore
 {
 }

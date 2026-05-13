@@ -12,6 +12,7 @@ members = [
     "crates/ingot-agent-protocol",
     "crates/ingot-agent-adapters",
     "crates/ingot-agent-runtime",
+    "crates/ingot-app",
     "crates/ingot-http-api",
     "crates/ingot-test-support",
 ]
@@ -34,6 +35,7 @@ ingot-workspace = { path = "crates/ingot-workspace" }
 ingot-agent-protocol = { path = "crates/ingot-agent-protocol" }
 ingot-agent-adapters = { path = "crates/ingot-agent-adapters" }
 ingot-agent-runtime = { path = "crates/ingot-agent-runtime" }
+ingot-app = { path = "crates/ingot-app" }
 ingot-http-api = { path = "crates/ingot-http-api" }
 ingot-test-support = { path = "crates/ingot-test-support" }
 

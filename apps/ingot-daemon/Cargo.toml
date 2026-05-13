@@ -13,6 +13,7 @@ ingot-usecases = { workspace = true }
 ingot-config = { workspace = true }
 ingot-store-sqlite = { workspace = true }
 ingot-agent-runtime = { workspace = true }
+ingot-app = { workspace = true }
 ingot-http-api = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }

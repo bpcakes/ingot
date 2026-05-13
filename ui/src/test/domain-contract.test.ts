@@ -1,6 +1,19 @@
 import type { ItemDetail, ItemSummary } from '../types/domain'
+import { testWorkflowPresentations } from './workflowPresentationFixture'
 
 describe('domain contract typing', () => {
+  it('keeps workflow presentation findings copy fields in wire-format snake case', () => {
+    expect(Object.keys(testWorkflowPresentations[0].findings_copy).sort()).toEqual([
+      'agent_scope_title',
+      'current_section_hint',
+      'current_section_title',
+      'previous_section_summary_noun',
+      'previous_section_title',
+      'triage_warning',
+    ])
+    expect('agentScopeTitle' in testWorkflowPresentations[0].findings_copy).toBe(false)
+  })
+
   it('models list responses as item summaries with nested evaluation data', () => {
     const summary: ItemSummary = {
       title: 'Fix critical bug',
@@ -75,6 +88,7 @@ describe('domain contract typing', () => {
         created_at: '2026-03-11T00:00:00Z',
         updated_at: '2026-03-11T00:10:00Z',
       },
+      workflow_presentations: testWorkflowPresentations,
       execution_mode: 'manual',
       current_revision: {
         id: 'rev_2',

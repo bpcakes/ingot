@@ -21,7 +21,7 @@ pub(super) async fn load_item_runtime_snapshot(
     item: &Item,
 ) -> Result<ItemRuntimeSnapshot, ingot_usecases::UseCaseError> {
     ingot_usecases::application::load_item_runtime_snapshot(
-        &state.db,
+        state.db(),
         &state.infra(),
         project_id,
         item,
@@ -34,7 +34,7 @@ pub(super) async fn load_item_detail(
     project_id: ProjectId,
     item_id: ItemId,
 ) -> Result<ItemDetailResponse, ApiError> {
-    let db = &state.db;
+    let db = state.db();
     let item = db.get_item(item_id).await.map_err(repo_to_item)?;
     if item.project_id != project_id {
         return Err(UseCaseError::ItemNotFound.into());
@@ -71,6 +71,7 @@ pub(super) async fn load_item_detail(
 
     Ok(ItemDetailResponse {
         item,
+        workflow_presentations: ingot_workflow::WORKFLOW_PRESENTATIONS,
         execution_mode: project.execution_mode,
         current_revision,
         evaluation,
@@ -100,7 +101,7 @@ async fn load_linked_finding_items(
         };
 
         let item = state
-            .db
+            .db()
             .get_item(linked_item_id)
             .await
             .map_err(repo_to_internal)?;
@@ -142,7 +143,11 @@ pub(super) async fn evaluate_item_snapshot(
         finalization,
         queue,
     } = ingot_usecases::application::evaluate_item_snapshot(
-        &state.db, project, item, snapshot, evaluator,
+        state.db(),
+        project,
+        item,
+        snapshot,
+        evaluator,
     )
     .await?;
 
@@ -225,7 +230,7 @@ mod tests {
             .created_at(Utc::now())
             .build();
         state
-            .db
+            .db()
             .create_project(&project)
             .await
             .expect("create project");

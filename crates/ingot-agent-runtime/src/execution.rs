@@ -650,7 +650,6 @@ impl JobDispatcher {
                 workspace_id: prepared.workspace.id,
                 ref_name: workspace_ref.clone(),
                 expected_old_oid: prepared.original_head_commit_oid.clone(),
-                new_oid: None,
                 commit_oid: None,
             },
             status: GitOperationStatus::Planned,

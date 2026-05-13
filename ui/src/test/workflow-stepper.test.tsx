@@ -1,16 +1,21 @@
 import { render, screen } from '@testing-library/react'
 import { WorkflowStepper } from '../components/item-detail/WorkflowStepper'
 import { TooltipProvider } from '../components/ui/tooltip'
-import type { Item } from '../types/domain'
+import type { WorkflowVersion } from '../types/domain'
+import { testWorkflowPresentationLookup } from './workflowPresentationFixture'
 
 function renderStepper(props: {
-  workflowVersion: Item['workflow_version']
+  workflowVersion: WorkflowVersion
   currentStepId: string | null
   dispatchableStepId: string | null
 }) {
   return render(
     <TooltipProvider>
-      <WorkflowStepper {...props} />
+      <WorkflowStepper
+        workflowPresentation={testWorkflowPresentationLookup[props.workflowVersion]}
+        currentStepId={props.currentStepId}
+        dispatchableStepId={props.dispatchableStepId}
+      />
     </TooltipProvider>,
   )
 }

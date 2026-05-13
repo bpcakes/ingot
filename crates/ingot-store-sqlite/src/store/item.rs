@@ -60,35 +60,10 @@ impl Database {
     }
 
     pub async fn update_item(&self, item: &Item) -> Result<(), RepositoryError> {
-        let result = sqlx::query(
-            "UPDATE items
-             SET classification = ?, workflow_version = ?, lifecycle_state = ?, parking_state = ?,
-                 done_reason = ?, resolution_source = ?, approval_state = ?, escalation_state = ?,
-                 escalation_reason = ?, current_revision_id = ?, origin_kind = ?, origin_finding_id = ?,
-                 priority = ?, labels = ?, operator_notes = ?, updated_at = ?, closed_at = ?
-             WHERE id = ?",
-        )
-        .bind(db_text(item.classification))
-        .bind(db_text(item.workflow_version))
-        .bind(lifecycle_state(&item.lifecycle))
-        .bind(db_text(item.parking_state))
-        .bind(optional_db_text(item.lifecycle.done_reason()))
-        .bind(optional_db_text(item.lifecycle.resolution_source()))
-        .bind(db_text(item.approval_state))
-        .bind(escalation_state(&item.escalation))
-        .bind(optional_db_text(item.escalation.reason()))
-        .bind(db_text(item.current_revision_id))
-        .bind(origin_kind(&item.origin))
-        .bind(optional_db_text(item.origin.finding_id()))
-        .bind(db_text(item.priority))
-        .bind(serde_json::to_string(&item.labels).map_err(json_err)?)
-        .bind(item.operator_notes.as_deref())
-        .bind(item.updated_at)
-        .bind(item.lifecycle.closed_at())
-        .bind(db_text(item.id))
-        .execute(&self.pool)
-        .await
-        .map_err(db_write_err)?;
+        let result = update_item_query(item)?
+            .execute(&self.pool)
+            .await
+            .map_err(db_write_err)?;
 
         ensure_rows_affected(result)
     }
@@ -109,6 +84,28 @@ impl Database {
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
+
+    pub async fn create_revision_and_update_item(
+        &self,
+        revision: &ItemRevision,
+        item: &Item,
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+
+        insert_revision_query(revision)?
+            .execute(&mut *tx)
+            .await
+            .map_err(db_write_err)?;
+
+        let result = update_item_query(item)?
+            .execute(&mut *tx)
+            .await
+            .map_err(db_write_err)?;
+        ensure_rows_affected(result)?;
 
         tx.commit().await.map_err(db_err)?;
         Ok(())
@@ -202,6 +199,35 @@ pub(crate) fn insert_item_query<'a>(item: &'a Item) -> Result<SqliteQuery<'a>, R
     .bind(item.created_at)
     .bind(item.updated_at)
     .bind(item.lifecycle.closed_at()))
+}
+
+pub(crate) fn update_item_query<'a>(item: &'a Item) -> Result<SqliteQuery<'a>, RepositoryError> {
+    Ok(sqlx::query(
+        "UPDATE items
+         SET classification = ?, workflow_version = ?, lifecycle_state = ?, parking_state = ?,
+             done_reason = ?, resolution_source = ?, approval_state = ?, escalation_state = ?,
+             escalation_reason = ?, current_revision_id = ?, origin_kind = ?, origin_finding_id = ?,
+             priority = ?, labels = ?, operator_notes = ?, updated_at = ?, closed_at = ?
+         WHERE id = ?",
+    )
+    .bind(db_text(item.classification))
+    .bind(db_text(item.workflow_version))
+    .bind(lifecycle_state(&item.lifecycle))
+    .bind(db_text(item.parking_state))
+    .bind(optional_db_text(item.lifecycle.done_reason()))
+    .bind(optional_db_text(item.lifecycle.resolution_source()))
+    .bind(db_text(item.approval_state))
+    .bind(escalation_state(&item.escalation))
+    .bind(optional_db_text(item.escalation.reason()))
+    .bind(db_text(item.current_revision_id))
+    .bind(origin_kind(&item.origin))
+    .bind(optional_db_text(item.origin.finding_id()))
+    .bind(db_text(item.priority))
+    .bind(serde_json::to_string(&item.labels).map_err(json_err)?)
+    .bind(item.operator_notes.as_deref())
+    .bind(item.updated_at)
+    .bind(item.lifecycle.closed_at())
+    .bind(db_text(item.id)))
 }
 
 fn map_item(row: &SqliteRow) -> Result<Item, RepositoryError> {

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { TooltipProvider } from '../components/ui/tooltip'
 import ItemDetailPage from '../pages/ItemDetailPage'
 import type { ItemDetail } from '../types/domain'
+import { testWorkflowPresentations } from './workflowPresentationFixture'
 
 function makeItemDetail(): ItemDetail {
   return {
@@ -25,6 +26,7 @@ function makeItemDetail(): ItemDetail {
       created_at: '2026-03-11T00:00:00Z',
       updated_at: '2026-03-11T00:00:00Z',
     },
+    workflow_presentations: testWorkflowPresentations,
     execution_mode: 'manual',
     current_revision: {
       id: 'rev_1',

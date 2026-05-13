@@ -17,14 +17,14 @@ use tokio::task::{Id as TaskId, JoinError, JoinSet};
 use tokio::time::sleep;
 use tracing::{debug, error, warn};
 
-use crate::bootstrap;
 use crate::harness::{
     PrepareHarnessValidationOutcome, PreparedHarnessValidation, is_daemon_only_validation,
     run_prepared_harness_validation_job,
 };
+use crate::startup::StartupReconciler;
 use crate::{
     JobDispatcher, PrepareRunOutcome, PreparedRun, RuntimeConvergencePort, RuntimeError,
-    RuntimeReconciliationPort, drain_until_idle, is_supported_runtime_job, run_prepared_agent_job,
+    RuntimeReconciliationPort, is_supported_runtime_job, run_prepared_agent_job,
     usecase_to_runtime_error,
 };
 
@@ -128,18 +128,7 @@ impl JobDispatcher {
     }
 
     pub async fn reconcile_startup(&self) -> Result<(), RuntimeError> {
-        bootstrap::ensure_default_agents(&self.db).await?;
-        let _ = self.reconcile_startup_assigned_jobs().await?;
-        let _ = self.reconcile_startup_daemon_validation_jobs().await?;
-        ReconciliationService::new(RuntimeReconciliationPort {
-            dispatcher: self.clone(),
-        })
-        .reconcile_startup()
-        .await
-        .map_err(usecase_to_runtime_error)?;
-        drain_until_idle(|| self.tick_system_action()).await?;
-        let _ = self.recover_projected_jobs().await?;
-        Ok(())
+        StartupReconciler::new(self).reconcile().await
     }
 
     pub async fn tick(&self) -> Result<bool, RuntimeError> {

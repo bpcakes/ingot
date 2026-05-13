@@ -1,121 +1,114 @@
-use std::fmt::Display;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::Method;
 use axum::middleware;
 use axum::response::Response;
-use ingot_config::paths::default_state_root;
-use ingot_domain::ids::ItemId;
-use ingot_domain::project::Project;
+use ingot_app::{
+    ApplicationCompleteJobService, ApplicationDatabase, ApplicationServices, RejectApprovalTeardown,
+};
+use ingot_domain::ids::{ItemId, ProjectId};
 use ingot_domain::revision::ItemRevision;
-use ingot_git::GitJobCompletionPort;
-use ingot_git::project_repo::project_repo_paths_for_project;
-use ingot_store_sqlite::Database;
-use ingot_usecases::application::refresh_revision_context_for_item;
-use ingot_usecases::{CompleteJobService, DispatchNotify, ProjectLocks, UiEventBus, UseCaseError};
+use ingot_usecases::{
+    DispatchNotify, ProjectLocks, UiEventBus, UseCaseError, application::ApplicationInfraPort,
+    dispatch::DispatchInfraPort, workspace::WorkspaceInfraPort,
+};
 
-use super::infra_ports::HttpInfraAdapter;
-use super::items::{self, RevisionLaneTeardown};
 use super::jobs;
-use super::support::errors::repo_to_item_usecase;
-use super::{agents, convergence, core, dispatch, findings, harness, projects, workspaces};
-
-pub(crate) type AppCompleteJobService =
-    CompleteJobService<Database, GitJobCompletionPort, ProjectLocks>;
+use super::{agents, convergence, core, dispatch, findings, harness, items, projects, workspaces};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) db: Database,
-    pub(crate) complete_job_service: AppCompleteJobService,
-    pub(crate) project_locks: ProjectLocks,
-    pub(crate) dispatch_notify: DispatchNotify,
-    pub(crate) ui_events: UiEventBus,
-    pub(crate) state_root: PathBuf,
+    services: ApplicationServices,
 }
 
 impl AppState {
+    pub(crate) fn from_services(services: ApplicationServices) -> Self {
+        Self { services }
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(
-        db: Database,
+        db: ApplicationDatabase,
         project_locks: ProjectLocks,
         state_root: PathBuf,
         dispatch_notify: DispatchNotify,
         ui_events: UiEventBus,
     ) -> Self {
-        let repo_path_resolver_root = state_root.clone();
-        Self {
-            db: db.clone(),
-            complete_job_service: CompleteJobService::with_repo_path_resolver(
-                db,
-                GitJobCompletionPort,
-                project_locks.clone(),
-                Arc::new(move |project: &Project| {
-                    project_repo_paths_for_project(repo_path_resolver_root.as_path(), project)
-                        .mirror_git_dir
-                }),
-            ),
-            project_locks,
-            dispatch_notify,
-            ui_events,
-            state_root,
-        }
+        let services =
+            ApplicationServices::new(db, project_locks, state_root, dispatch_notify, ui_events);
+        Self::from_services(services)
     }
 
-    pub(super) fn infra(&self) -> HttpInfraAdapter {
-        HttpInfraAdapter::new(self)
+    pub(crate) fn infra(
+        &self,
+    ) -> impl ApplicationInfraPort + DispatchInfraPort + WorkspaceInfraPort + Clone + 'static {
+        self.services.infra()
     }
 
-    pub(super) fn job_logs_dir(&self, job_id: impl Display) -> PathBuf {
-        ingot_config::paths::job_logs_dir(self.state_root.as_path(), job_id)
+    pub(crate) fn job_logs_dir(&self, job_id: impl std::fmt::Display) -> PathBuf {
+        self.services.job_logs_dir(job_id)
+    }
+
+    pub(crate) fn db(&self) -> &ApplicationDatabase {
+        self.services.db()
+    }
+
+    pub(crate) fn complete_job_service(&self) -> &ApplicationCompleteJobService {
+        self.services.complete_job_service()
+    }
+
+    pub(crate) fn project_locks(&self) -> &ProjectLocks {
+        self.services.project_locks()
+    }
+
+    pub(crate) fn dispatch_notify(&self) -> &DispatchNotify {
+        self.services.dispatch_notify()
+    }
+
+    pub(crate) fn ui_events(&self) -> &UiEventBus {
+        self.services.ui_events()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_root(&self) -> &std::path::Path {
+        self.services.state_root()
+    }
+
+    pub(crate) async fn queue_prepare_convergence(
+        &self,
+        project_id: ProjectId,
+        item_id: ItemId,
+    ) -> Result<(), UseCaseError> {
+        self.services
+            .queue_prepare_convergence(project_id, item_id)
+            .await
+    }
+
+    pub(crate) async fn approve_item(
+        &self,
+        project_id: ProjectId,
+        item_id: ItemId,
+    ) -> Result<(), UseCaseError> {
+        self.services.approve_item(project_id, item_id).await
+    }
+
+    pub(crate) async fn reject_item_approval(
+        &self,
+        project_id: ProjectId,
+        item_id: ItemId,
+        next_revision: &ItemRevision,
+    ) -> Result<RejectApprovalTeardown, UseCaseError> {
+        self.services
+            .reject_item_approval(project_id, item_id, next_revision)
+            .await
     }
 }
 
 /// Build the Axum router with all API routes.
-pub fn build_router(db: Database) -> Router {
-    build_router_with_project_locks_and_state_root_and_events(
-        db,
-        ProjectLocks::default(),
-        default_state_root(),
-        DispatchNotify::default(),
-        UiEventBus::default(),
-    )
-}
-
-pub fn build_router_with_project_locks(db: Database, project_locks: ProjectLocks) -> Router {
-    build_router_with_project_locks_and_state_root_and_events(
-        db,
-        project_locks,
-        default_state_root(),
-        DispatchNotify::default(),
-        UiEventBus::default(),
-    )
-}
-
-pub fn build_router_with_project_locks_and_state_root(
-    db: Database,
-    project_locks: ProjectLocks,
-    state_root: PathBuf,
-    dispatch_notify: DispatchNotify,
-) -> Router {
-    build_router_with_project_locks_and_state_root_and_events(
-        db,
-        project_locks,
-        state_root,
-        dispatch_notify,
-        UiEventBus::default(),
-    )
-}
-
-pub fn build_router_with_project_locks_and_state_root_and_events(
-    db: Database,
-    project_locks: ProjectLocks,
-    state_root: PathBuf,
-    dispatch_notify: DispatchNotify,
-    ui_events: UiEventBus,
-) -> Router {
-    let state = AppState::new(db, project_locks, state_root, dispatch_notify, ui_events);
+pub fn build_router_with_services(services: ApplicationServices) -> Router {
+    let state = AppState::from_services(services);
 
     Router::new()
         .merge(core::routes())
@@ -151,7 +144,7 @@ async fn dispatch_notify_layer(
         should_notify.then(|| format!("http {} {}", request.method(), request.uri().path()));
     let response = next.run(request).await;
     if should_notify && response.status().is_success() {
-        state.dispatch_notify.notify_with_reason(
+        state.dispatch_notify().notify_with_reason(
             notify_reason.expect("write requests should always have a notify reason"),
         );
     }
@@ -163,64 +156,4 @@ fn is_dispatch_write(method: &Method) -> bool {
         method,
         &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
     )
-}
-
-pub(crate) async fn teardown_revision_lane_state(
-    state: &AppState,
-    project: &Project,
-    item_id: ItemId,
-    revision: &ItemRevision,
-) -> Result<RevisionLaneTeardown, UseCaseError> {
-    let uc_result =
-        ingot_usecases::teardown::teardown_revision_lane(&state.db, project.id, item_id, revision)
-            .await?;
-
-    let item = state
-        .db
-        .get_item(item_id)
-        .await
-        .map_err(repo_to_item_usecase)?;
-    let infra = state.infra();
-    refresh_revision_context_for_item(&state.db, &infra, &item, revision).await?;
-
-    for workspace_id in &uc_result.integration_workspace_ids {
-        let workspace = state
-            .db
-            .get_workspace(*workspace_id)
-            .await
-            .map_err(UseCaseError::Repository)?;
-        if workspace.path.exists() {
-            let _ = infra
-                .remove_workspace_path(project.id, &workspace.path)
-                .await;
-        }
-    }
-
-    Ok(RevisionLaneTeardown {
-        cancelled_job_ids: uc_result
-            .cancelled_job_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        cancelled_convergence_ids: uc_result
-            .cancelled_convergence_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        cancelled_queue_entry_ids: uc_result
-            .cancelled_queue_entry_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        reconciled_prepare_operation_ids: uc_result
-            .reconciled_git_operation_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        failed_finalize_operation_ids: uc_result
-            .failed_git_operation_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-    })
 }

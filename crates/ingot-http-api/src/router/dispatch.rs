@@ -40,16 +40,16 @@ pub(super) async fn dispatch_item_job(
     maybe_request: Option<Json<DispatchJobRequest>>,
 ) -> Result<(StatusCode, Json<Job>), ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
 
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
+    let item = state.db().get_item(item_id).await.map_err(repo_to_item)?;
     if item.project_id != project_id {
         return Err(UseCaseError::ItemNotFound.into());
     }
@@ -73,7 +73,7 @@ pub(super) async fn dispatch_item_job(
     )?;
     let infra = state.infra();
     let prepared = prepare_and_persist_dispatched_job(
-        &state.db,
+        state.db(),
         &infra,
         &project,
         &item,
@@ -101,16 +101,16 @@ pub(super) async fn retry_item_job(
     }): ApiPath<ProjectItemJobPathParams>,
 ) -> Result<(StatusCode, Json<Job>), ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
 
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
+    let item = state.db().get_item(item_id).await.map_err(repo_to_item)?;
     if item.project_id != project_id {
         return Err(UseCaseError::ItemNotFound.into());
     }
@@ -140,7 +140,7 @@ pub(super) async fn retry_item_job(
     let retry_no = job.retry_no;
     let infra = state.infra();
     let prepared = prepare_and_persist_dispatched_job(
-        &state.db,
+        state.db(),
         &infra,
         &project,
         &item,
@@ -200,12 +200,12 @@ mod tests {
         let state = test_app_state().await;
         let project = test_project(repo.clone());
         state
-            .db
+            .db()
             .create_project(&project)
             .await
             .expect("create project");
 
-        let paths = project_repo_paths(state.state_root.as_path(), project.id, &repo);
+        let paths = project_repo_paths(state.state_root(), project.id, &repo);
         ensure_mirror(&paths).await.expect("ensure mirror");
 
         let workspace_id = WorkspaceId::from_uuid(Uuid::now_v7());
@@ -215,7 +215,7 @@ mod tests {
             &["update-ref", &workspace_ref, &head],
         );
         let workspace_path = state
-            .state_root
+            .state_root()
             .join(format!("cleanup-workspace-{}", Uuid::now_v7()));
         git(
             &paths.mirror_git_dir,
@@ -237,7 +237,7 @@ mod tests {
             .created_at(Utc::now())
             .build();
         state
-            .db
+            .db()
             .create_workspace(&workspace)
             .await
             .expect("create workspace row");
@@ -251,7 +251,7 @@ mod tests {
             &["update-ref", &investigation_ref, &head],
         );
         state
-            .db
+            .db()
             .create_git_operation(&GitOperation {
                 id: GitOperationId::new(),
                 project_id: project.id,
@@ -268,9 +268,9 @@ mod tests {
             .await
             .expect("create git operation");
 
-        let infra = super::super::infra_ports::HttpInfraAdapter::new(&state);
+        let infra = state.infra();
         ingot_usecases::dispatch::cleanup_failed_dispatch(
-            &state.db,
+            state.db(),
             &infra,
             project.id,
             Some(&workspace),
@@ -297,7 +297,7 @@ mod tests {
         let workspace_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = ?")
                 .bind(workspace.id.to_string())
-                .fetch_one(state.db.raw_pool())
+                .fetch_one(state.db().raw_pool())
                 .await
                 .expect("workspace count");
         assert_eq!(workspace_count, 0);
@@ -305,7 +305,7 @@ mod tests {
             "SELECT COUNT(*) FROM git_operations WHERE operation_kind = 'create_investigation_ref' AND ref_name = ?",
         )
         .bind(&investigation_ref)
-        .fetch_one(state.db.raw_pool())
+        .fetch_one(state.db().raw_pool())
         .await
         .expect("operation count");
         assert_eq!(op_count, 0);
@@ -315,11 +315,11 @@ mod tests {
     async fn cleanup_failed_dispatch_side_effects_deletes_db_rows_when_mirror_refresh_fails() {
         let state = test_app_state().await;
         let missing_repo = state
-            .state_root
+            .state_root()
             .join(format!("missing-repo-{}", Uuid::now_v7()));
         let project = test_project(missing_repo);
         state
-            .db
+            .db()
             .create_project(&project)
             .await
             .expect("create project");
@@ -328,7 +328,7 @@ mod tests {
             .id(WorkspaceId::from_uuid(Uuid::now_v7()))
             .path(
                 state
-                    .state_root
+                    .state_root()
                     .join(format!("orphaned-workspace-{}", Uuid::now_v7()))
                     .display()
                     .to_string(),
@@ -343,7 +343,7 @@ mod tests {
             .created_at(Utc::now())
             .build();
         state
-            .db
+            .db()
             .create_workspace(&workspace)
             .await
             .expect("create workspace row");
@@ -353,7 +353,7 @@ mod tests {
             JobId::from_uuid(Uuid::now_v7())
         );
         state
-            .db
+            .db()
             .create_git_operation(&GitOperation {
                 id: GitOperationId::new(),
                 project_id: project.id,
@@ -370,9 +370,9 @@ mod tests {
             .await
             .expect("create git operation");
 
-        let infra = super::super::infra_ports::HttpInfraAdapter::new(&state);
+        let infra = state.infra();
         ingot_usecases::dispatch::cleanup_failed_dispatch(
-            &state.db,
+            state.db(),
             &infra,
             project.id,
             Some(&workspace),
@@ -383,7 +383,7 @@ mod tests {
         let workspace_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = ?")
                 .bind(workspace.id.to_string())
-                .fetch_one(state.db.raw_pool())
+                .fetch_one(state.db().raw_pool())
                 .await
                 .expect("workspace count");
         assert_eq!(workspace_count, 0);
@@ -391,7 +391,7 @@ mod tests {
             "SELECT COUNT(*) FROM git_operations WHERE operation_kind = 'create_investigation_ref' AND ref_name = ?",
         )
         .bind(&investigation_ref)
-        .fetch_one(state.db.raw_pool())
+        .fetch_one(state.db().raw_pool())
         .await
         .expect("operation count");
         assert_eq!(op_count, 0);

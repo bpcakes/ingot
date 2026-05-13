@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use ingot_agent_runtime::{DispatcherConfig, JobDispatcher};
+use ingot_app::ApplicationServices;
 use ingot_config::paths::{database_path_for_state_root, default_state_root, logs_root};
 use ingot_usecases::{DispatchNotify, ProjectLocks, UiEventBus};
 use tokio::net::TcpListener;
@@ -26,9 +27,17 @@ async fn main() -> Result<()> {
     let project_locks = ProjectLocks::default();
     let dispatch_notify = DispatchNotify::default();
     let ui_events = UiEventBus::default();
-    let dispatcher = JobDispatcher::new_with_events(
+    let services = ApplicationServices::new(
         db.clone(),
         project_locks.clone(),
+        state_root.clone(),
+        dispatch_notify.clone(),
+        ui_events.clone(),
+    );
+    let dispatcher = JobDispatcher::new_with_complete_job_service_and_events(
+        db.clone(),
+        project_locks.clone(),
+        services.complete_job_service().clone(),
         DispatcherConfig::new(state_root.clone()),
         dispatch_notify.clone(),
         ui_events.clone(),
@@ -40,13 +49,7 @@ async fn main() -> Result<()> {
     tracing::info!("background dispatcher started");
 
     // HTTP server
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root_and_events(
-        db.clone(),
-        project_locks,
-        state_root.clone(),
-        dispatch_notify,
-        ui_events,
-    );
+    let app = ingot_http_api::build_router_with_services(services);
     let addr = SocketAddr::from(([127, 0, 0, 1], 4190));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("listening on {addr}");

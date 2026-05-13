@@ -12,7 +12,7 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state.ui_events.subscribe()))
+    ws.on_upgrade(move |socket| handle_socket(socket, state.ui_events().subscribe()))
 }
 
 async fn handle_socket(

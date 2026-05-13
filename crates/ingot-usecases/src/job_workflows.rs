@@ -7,12 +7,12 @@ use ingot_domain::item::ApprovalState;
 use ingot_domain::job::{Job, OutcomeClass};
 use ingot_domain::ports::{
     ActivityRepository, ItemRepository, JobCompletionGitPort, JobRepository,
-    ProjectMutationLockPort, ProjectRepository, RepositoryError,
+    ProjectMutationLockPort, ProjectRepository, RepositoryError, WorkspaceRepository,
 };
 
 use crate::application::{ApplicationInfraPort, refresh_revision_context_for_job};
 use crate::item_commands::auto_dispatch_projected_review_job;
-use crate::store::JobWorkflowStore;
+use crate::store::{ApplicationJobContextStore, ItemRuntimeSnapshotStore};
 use crate::{
     CompleteJobCommand, CompleteJobError, CompleteJobResult, CompleteJobService, UseCaseError,
 };
@@ -52,7 +52,13 @@ pub async fn complete_job_workflow<R, I, C, L>(
     command: CompleteJobCommand,
 ) -> Result<CompleteJobWorkflowOutput, CompleteJobError>
 where
-    R: JobWorkflowStore,
+    R: JobRepository
+        + ItemRepository
+        + ProjectRepository
+        + WorkspaceRepository
+        + ActivityRepository
+        + ApplicationJobContextStore
+        + ItemRuntimeSnapshotStore,
     I: ApplicationInfraPort,
     C: CompleteJobExecutor,
     L: ProjectMutationLockPort,

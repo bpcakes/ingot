@@ -38,7 +38,7 @@ pub(super) async fn get_finding(
     ApiPath(FindingPathParams { finding_id }): ApiPath<FindingPathParams>,
 ) -> Result<Json<Finding>, ApiError> {
     let finding = state
-        .db
+        .db()
         .get_finding(finding_id)
         .await
         .map_err(repo_to_finding)?;
@@ -51,9 +51,9 @@ pub(super) async fn triage_item_finding(
     request: TriageFindingRequest,
 ) -> Result<Json<Finding>, ApiError> {
     let applied = finding_uc::apply_finding_triage(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         triage_command(finding_id, request),
     )
     .await?;
@@ -67,9 +67,9 @@ pub(super) async fn dismiss_item_finding(
     Json(request): Json<DismissFindingRequest>,
 ) -> Result<Json<Finding>, ApiError> {
     let applied = finding_uc::apply_finding_triage(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         finding_uc::TriageFindingCommand {
             finding_id,
             triage_state: FindingTriageState::DismissedInvalid,
@@ -99,9 +99,9 @@ pub(super) async fn promote_item_from_finding(
     let dispatch_immediately = dispatch_immediately.unwrap_or(false);
 
     let output = finding_uc::promote_finding(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.project_locks,
+        state.project_locks(),
         finding_uc::PromoteFindingCommand {
             finding_id,
             target_ref,
@@ -165,8 +165,8 @@ pub(super) async fn batch_promote_findings_handler(
     Json(request): Json<BatchPromoteFindingsRequest>,
 ) -> Result<Json<BatchPromoteFindingsResponse>, ApiError> {
     let output = finding_uc::batch_promote_findings_command(
-        &state.db,
-        &state.project_locks,
+        state.db(),
+        state.project_locks(),
         finding_uc::BatchPromoteFindingsCommand {
             project_id,
             finding_ids: request.finding_ids,

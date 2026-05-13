@@ -18,6 +18,12 @@ use crate::UseCaseError;
 use crate::job::map_finish_non_success_error;
 use crate::store::RevisionLaneTeardownStore;
 
+#[derive(Debug, Clone)]
+pub struct RevisionLaneTeardownPlan {
+    pub result: RevisionLaneTeardownResult,
+    pub mutation: RevisionLaneTeardownMutation,
+}
+
 /// Result of tearing down a revision lane's active state.
 /// Callers use this to decide what infrastructure side effects to perform
 /// (e.g., filesystem removal, git ref cleanup).
@@ -62,6 +68,30 @@ pub async fn teardown_revision_lane<S>(
     item_id: ItemId,
     revision: &ItemRevision,
 ) -> Result<RevisionLaneTeardownResult, UseCaseError>
+where
+    S: RevisionLaneTeardownStore,
+{
+    let plan = plan_revision_lane_teardown(store, project_id, item_id, revision).await?;
+
+    store
+        .apply_revision_lane_teardown_mutation(plan.mutation)
+        .await
+        .map_err(|error| {
+            map_finish_non_success_error(
+                error,
+                "job failure does not match the current item revision",
+            )
+        })?;
+
+    Ok(plan.result)
+}
+
+pub async fn plan_revision_lane_teardown<S>(
+    store: &S,
+    project_id: ProjectId,
+    item_id: ItemId,
+    revision: &ItemRevision,
+) -> Result<RevisionLaneTeardownPlan, UseCaseError>
 where
     S: RevisionLaneTeardownStore,
 {
@@ -212,19 +242,7 @@ where
         }
     }
 
-    // --- Apply phase (single atomic write) ---
-
-    store
-        .apply_revision_lane_teardown_mutation(mutation)
-        .await
-        .map_err(|error| {
-            map_finish_non_success_error(
-                error,
-                "job failure does not match the current item revision",
-            )
-        })?;
-
-    Ok(result)
+    Ok(RevisionLaneTeardownPlan { result, mutation })
 }
 
 #[cfg(test)]

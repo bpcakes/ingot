@@ -13,7 +13,6 @@ use ingot_domain::revision::AuthoringBaseSeed;
 use ingot_domain::workspace::{RetentionPolicy, WorkspaceKind};
 use ingot_git::commands::resolve_ref_oid;
 use ingot_git::project_repo::{ensure_mirror, project_repo_paths};
-use ingot_http_api::build_router_with_project_locks_and_state_root;
 use ingot_test_support::env::temp_state_root;
 use ingot_usecases::{DispatchNotify, ProjectLocks};
 use tower::ServiceExt;

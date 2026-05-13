@@ -1,8 +1,8 @@
 import { CheckIcon, CircleDotIcon, CircleIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { Item, PhaseKind } from '../../types/domain'
+import type { PhaseKind } from '../../types/domain'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
-import { WORKFLOW_PHASES_BY_VERSION, type WorkflowPhaseDef } from './workflowPresentation'
+import type { WorkflowPhaseDef, WorkflowPresentation } from './workflowPresentation'
 
 const PHASE_DOT_COLORS: Record<PhaseKind, string> = {
   author: 'bg-blue-500',
@@ -51,15 +51,15 @@ function getPhaseState(phase: WorkflowPhaseDef, currentId: string | null, allSte
 // ── Component ──────────────────────────────────────────────────
 
 export function WorkflowStepper({
-  workflowVersion,
+  workflowPresentation,
   currentStepId,
   dispatchableStepId,
 }: {
-  workflowVersion: Item['workflow_version']
+  workflowPresentation: WorkflowPresentation
   currentStepId: string | null
   dispatchableStepId: string | null
 }) {
-  const workflowPhases = WORKFLOW_PHASES_BY_VERSION[workflowVersion]
+  const workflowPhases = workflowPresentation.phases
   const allStepIds = workflowPhases.flatMap((phase) => phase.steps.map((step) => step.id))
   const visualCurrentStepId = currentStepId ?? dispatchableStepId
   const currentStep = workflowPhases.flatMap((phase) => phase.steps).find((step) => step.id === visualCurrentStepId)

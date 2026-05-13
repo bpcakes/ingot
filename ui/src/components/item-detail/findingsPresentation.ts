@@ -1,5 +1,5 @@
 import type { Finding, FindingTriageState, Job, LinkedFindingItemSummary } from '../../types/domain'
-import { WORKFLOW_FINDINGS_COPY, type WorkflowFindingsCopy, type WorkflowVersion } from './workflowPresentation'
+import type { WorkflowFindingsCopy, WorkflowPresentationLookup, WorkflowVersion } from './workflowPresentation'
 
 export type FindingGroup = {
   jobId: string
@@ -93,12 +93,13 @@ export function isInvestigationGroup(group: FindingGroup): boolean {
 export function findingsCopyForGroup(
   group: FindingGroup | undefined,
   workflowVersion: WorkflowVersion,
+  workflowPresentations: WorkflowPresentationLookup,
 ): WorkflowFindingsCopy {
   if (group && isInvestigationGroup(group)) {
-    return WORKFLOW_FINDINGS_COPY['investigation:v1']
+    return workflowPresentations['investigation:v1'].findings_copy
   }
 
-  return WORKFLOW_FINDINGS_COPY[workflowVersion]
+  return workflowPresentations[workflowVersion].findings_copy
 }
 
 export function triageCopyForGroup(

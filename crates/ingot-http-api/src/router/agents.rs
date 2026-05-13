@@ -31,7 +31,7 @@ pub(super) fn routes() -> Router<AppState> {
 pub(super) async fn list_agents(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Agent>>, ApiError> {
-    let agents = state.db.list_agents().await.map_err(repo_to_internal)?;
+    let agents = state.db().list_agents().await.map_err(repo_to_internal)?;
     Ok(Json(agents))
 }
 
@@ -56,7 +56,7 @@ pub(super) async fn create_agent(
     probe_and_apply(&mut agent).await;
 
     state
-        .db
+        .db()
         .create_agent(&agent)
         .await
         .map_err(repo_to_agent_mutation)?;
@@ -69,7 +69,11 @@ pub(super) async fn update_agent(
     ApiPath(AgentPathParams { agent_id }): ApiPath<AgentPathParams>,
     Json(request): Json<UpdateAgentRequest>,
 ) -> Result<Json<Agent>, ApiError> {
-    let existing = state.db.get_agent(agent_id).await.map_err(repo_to_agent)?;
+    let existing = state
+        .db()
+        .get_agent(agent_id)
+        .await
+        .map_err(repo_to_agent)?;
     let existing_name = existing.name.clone();
     let existing_slug = existing.slug.clone();
     let existing_provider = existing.provider;
@@ -103,7 +107,7 @@ pub(super) async fn update_agent(
     probe_and_apply(&mut agent).await;
 
     state
-        .db
+        .db()
         .update_agent(&agent)
         .await
         .map_err(repo_to_agent_mutation)?;
@@ -116,7 +120,7 @@ pub(super) async fn delete_agent(
     ApiPath(AgentPathParams { agent_id }): ApiPath<AgentPathParams>,
 ) -> Result<StatusCode, ApiError> {
     state
-        .db
+        .db()
         .delete_agent(agent_id)
         .await
         .map_err(repo_to_agent_mutation)?;
@@ -128,11 +132,15 @@ pub(super) async fn reprobe_agent(
     State(state): State<AppState>,
     ApiPath(AgentPathParams { agent_id }): ApiPath<AgentPathParams>,
 ) -> Result<Json<Agent>, ApiError> {
-    let mut agent = state.db.get_agent(agent_id).await.map_err(repo_to_agent)?;
+    let mut agent = state
+        .db()
+        .get_agent(agent_id)
+        .await
+        .map_err(repo_to_agent)?;
     probe_and_apply(&mut agent).await;
 
     state
-        .db
+        .db()
         .update_agent(&agent)
         .await
         .map_err(repo_to_agent_mutation)?;

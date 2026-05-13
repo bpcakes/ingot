@@ -106,14 +106,12 @@ pub enum OperationPayload {
         workspace_id: WorkspaceId,
         ref_name: GitRef,
         expected_old_oid: CommitOid,
-        new_oid: Option<CommitOid>,
         commit_oid: Option<CommitOid>,
     },
     PrepareConvergenceCommit {
         workspace_id: WorkspaceId,
         ref_name: Option<GitRef>,
         expected_old_oid: CommitOid,
-        new_oid: Option<CommitOid>,
         commit_oid: Option<CommitOid>,
         replay_metadata: Option<ConvergenceReplayMetadata>,
     },
@@ -229,8 +227,8 @@ impl OperationPayload {
     #[must_use]
     pub fn new_oid(&self) -> Option<&CommitOid> {
         match self {
-            Self::CreateJobCommit { new_oid, .. }
-            | Self::PrepareConvergenceCommit { new_oid, .. } => new_oid.as_ref(),
+            Self::CreateJobCommit { commit_oid, .. }
+            | Self::PrepareConvergenceCommit { commit_oid, .. } => commit_oid.as_ref(),
             Self::FinalizeTargetRef { new_oid, .. }
             | Self::CreateInvestigationRef { new_oid, .. }
             | Self::ResetWorkspace { new_oid, .. } => Some(new_oid),
@@ -268,12 +266,7 @@ impl OperationPayload {
 
     pub fn set_job_commit_result(&mut self, oid: CommitOid) -> Result<(), OperationPayloadError> {
         match self {
-            Self::CreateJobCommit {
-                new_oid,
-                commit_oid,
-                ..
-            } => {
-                *new_oid = Some(oid.clone());
+            Self::CreateJobCommit { commit_oid, .. } => {
                 *commit_oid = Some(oid);
                 Ok(())
             }
@@ -286,12 +279,7 @@ impl OperationPayload {
         tip_oid: CommitOid,
     ) -> Result<(), OperationPayloadError> {
         match self {
-            Self::PrepareConvergenceCommit {
-                new_oid,
-                commit_oid,
-                ..
-            } => {
-                *new_oid = Some(tip_oid.clone());
+            Self::PrepareConvergenceCommit { commit_oid, .. } => {
                 *commit_oid = Some(tip_oid);
                 Ok(())
             }
@@ -405,8 +393,7 @@ impl TryFrom<GitOperationWire> for GitOperation {
                     workspace_id,
                     ref_name,
                     expected_old_oid,
-                    new_oid: w.new_oid,
-                    commit_oid: w.commit_oid,
+                    commit_oid: w.commit_oid.or(w.new_oid),
                 }
             }
             OperationKind::PrepareConvergenceCommit => {
@@ -420,8 +407,7 @@ impl TryFrom<GitOperationWire> for GitOperation {
                     workspace_id,
                     ref_name: w.ref_name,
                     expected_old_oid,
-                    new_oid: w.new_oid,
-                    commit_oid: w.commit_oid,
+                    commit_oid: w.commit_oid.or(w.new_oid),
                     replay_metadata,
                 }
             }
@@ -568,7 +554,6 @@ mod tests {
             workspace_id: test_workspace_id(),
             ref_name: GitRef::new("refs/ingot/workspaces/auth"),
             expected_old_oid: "aaa".into(),
-            new_oid: None,
             commit_oid: None,
         };
         assert_eq!(payload.operation_kind(), OperationKind::CreateJobCommit);
@@ -590,7 +575,6 @@ mod tests {
             workspace_id: test_workspace_id(),
             ref_name: GitRef::new("ref"),
             expected_old_oid: "old".into(),
-            new_oid: Some("new".into()),
             commit_oid: Some("commit".into()),
         };
         assert_eq!(
@@ -615,12 +599,11 @@ mod tests {
     }
 
     #[test]
-    fn set_job_commit_result_sets_both_fields() {
+    fn set_job_commit_result_sets_commit_result() {
         let mut payload = OperationPayload::CreateJobCommit {
             workspace_id: test_workspace_id(),
             ref_name: GitRef::new("ref"),
             expected_old_oid: "old".into(),
-            new_oid: None,
             commit_oid: None,
         };
         payload.set_job_commit_result("abc123".into()).unwrap();
@@ -629,12 +612,11 @@ mod tests {
     }
 
     #[test]
-    fn set_convergence_commit_result_sets_both_fields() {
+    fn set_convergence_commit_result_sets_commit_result() {
         let mut payload = OperationPayload::PrepareConvergenceCommit {
             workspace_id: test_workspace_id(),
             ref_name: None,
             expected_old_oid: "old".into(),
-            new_oid: None,
             commit_oid: None,
             replay_metadata: None,
         };
@@ -651,7 +633,6 @@ mod tests {
             workspace_id: test_workspace_id(),
             ref_name: None,
             expected_old_oid: "old".into(),
-            new_oid: None,
             commit_oid: None,
             replay_metadata: None,
         };
@@ -696,7 +677,6 @@ mod tests {
             workspace_id: test_workspace_id(),
             ref_name: GitRef::new("ref"),
             expected_old_oid: "old".into(),
-            new_oid: None,
             commit_oid: None,
         };
 
@@ -718,7 +698,6 @@ mod tests {
                     workspace_id: test_workspace_id(),
                     ref_name: GitRef::new("r"),
                     expected_old_oid: "o".into(),
-                    new_oid: None,
                     commit_oid: None,
                 },
                 GitEntityType::Job,
@@ -728,7 +707,6 @@ mod tests {
                     workspace_id: test_workspace_id(),
                     ref_name: None,
                     expected_old_oid: "o".into(),
-                    new_oid: None,
                     commit_oid: None,
                     replay_metadata: None,
                 },

@@ -7,13 +7,12 @@ rust-version.workspace = true
 [dependencies]
 ingot-agent-adapters = { workspace = true }
 ingot-agent-protocol = { workspace = true }
+ingot-app = { workspace = true }
 ingot-config = { workspace = true }
 ingot-domain = { workspace = true }
 ingot-git = { workspace = true }
-ingot-store-sqlite = { workspace = true }
 ingot-usecases = { workspace = true }
 ingot-workflow = { workspace = true }
-ingot-workspace = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,6 +30,7 @@ ingot-store-sqlite = { workspace = true }
 ingot-test-support = { workspace = true }
 ingot-usecases = { workspace = true }
 ingot-workflow = { workspace = true }
+ingot-workspace = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }

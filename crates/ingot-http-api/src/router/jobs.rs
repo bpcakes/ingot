@@ -8,6 +8,7 @@ use ingot_domain::job::{JobStatus, OutcomeClass};
 use ingot_domain::ports::ProjectMutationLockPort;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::workspace::WorkspaceStatus;
+use ingot_usecases::application::ApplicationInfraPort;
 use ingot_usecases::dispatch::failure_status;
 use ingot_usecases::job;
 use ingot_usecases::job_workflows;
@@ -49,20 +50,20 @@ pub(super) async fn cancel_item_job(
     }): ApiPath<ProjectItemJobPathParams>,
 ) -> Result<Json<()>, ApiError> {
     let _project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project_id)
         .await;
 
-    let item = state.db.get_item(item_id).await.map_err(repo_to_item)?;
+    let item = state.db().get_item(item_id).await.map_err(repo_to_item)?;
     if item.project_id != project_id {
         return Err(UseCaseError::ItemNotFound.into());
     }
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
+    let job = state.db().get_job(job_id).await.map_err(repo_to_internal)?;
     if job.item_id != item.id {
         return Err(ApiError::NotFound {
             code: "job_not_found",
@@ -77,9 +78,9 @@ pub(super) async fn cancel_item_job(
     }
 
     job::cancel_job(
-        &state.db,
-        &state.db,
-        &state.db,
+        state.db(),
+        state.db(),
+        state.db(),
         &job,
         &item,
         "operator_cancelled",
@@ -95,7 +96,7 @@ pub(super) async fn get_job_logs(
     State(state): State<AppState>,
     ApiPath(JobPathParams { job_id }): ApiPath<JobPathParams>,
 ) -> Result<Json<JobLogsResponse>, ApiError> {
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
+    let job = state.db().get_job(job_id).await.map_err(repo_to_internal)?;
     let logs_dir = state.job_logs_dir(job_id);
 
     let prompt = read_optional_text(logs_dir.join("prompt.txt")).await?;
@@ -191,7 +192,7 @@ pub(super) async fn get_job_logs_raw(
     State(state): State<AppState>,
     ApiPath(JobPathParams { job_id }): ApiPath<JobPathParams>,
 ) -> Result<Json<JobRawLogsResponse>, ApiError> {
-    state.db.get_job(job_id).await.map_err(repo_to_internal)?;
+    state.db().get_job(job_id).await.map_err(repo_to_internal)?;
     let logs_dir = state.job_logs_dir(job_id);
 
     let prompt = read_optional_text(logs_dir.join("prompt.txt")).await?;
@@ -213,10 +214,10 @@ pub(super) async fn complete_job(
     Json(request): Json<CompleteJobRequest>,
 ) -> Result<Json<CompleteJobResponse>, ApiError> {
     let output = job_workflows::complete_job_workflow(
-        &state.db,
+        state.db(),
         &state.infra(),
-        &state.complete_job_service,
-        &state.project_locks,
+        state.complete_job_service(),
+        state.project_locks(),
         CompleteJobCommand {
             job_id,
             outcome_class: request.outcome_class,
@@ -247,8 +248,12 @@ pub(super) async fn fail_job(
 ) -> Result<Json<()>, ApiError> {
     // Validate outcome_class is valid for failure endpoint before proceeding
     let _status = map_failure_status(request.outcome_class)?;
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
-    let item = state.db.get_item(job.item_id).await.map_err(repo_to_item)?;
+    let job = state.db().get_job(job_id).await.map_err(repo_to_internal)?;
+    let item = state
+        .db()
+        .get_item(job.item_id)
+        .await
+        .map_err(repo_to_item)?;
     if job.item_revision_id != item.current_revision_id {
         return Err(UseCaseError::ProtocolViolation(
             "job failure does not match the current item revision".into(),
@@ -257,9 +262,9 @@ pub(super) async fn fail_job(
     }
 
     job::fail_job(
-        &state.db,
-        &state.db,
-        &state.db,
+        state.db(),
+        state.db(),
+        state.db(),
         &job,
         &item,
         request.outcome_class,
@@ -277,8 +282,12 @@ pub(super) async fn expire_job(
     State(state): State<AppState>,
     ApiPath(JobPathParams { job_id }): ApiPath<JobPathParams>,
 ) -> Result<Json<()>, ApiError> {
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
-    let item = state.db.get_item(job.item_id).await.map_err(repo_to_item)?;
+    let job = state.db().get_job(job_id).await.map_err(repo_to_internal)?;
+    let item = state
+        .db()
+        .get_item(job.item_id)
+        .await
+        .map_err(repo_to_item)?;
     if job.item_revision_id != item.current_revision_id {
         return Err(UseCaseError::ProtocolViolation(
             "job expiration does not match the current item revision".into(),
@@ -287,9 +296,9 @@ pub(super) async fn expire_job(
     }
 
     job::expire_job(
-        &state.db,
-        &state.db,
-        &state.db,
+        state.db(),
+        state.db(),
+        state.db(),
         &job,
         &item,
         WorkspaceStatus::Ready,
@@ -304,15 +313,19 @@ pub(super) async fn refresh_revision_context_for_job(
     state: &AppState,
     job_id: JobId,
 ) -> Result<(), ApiError> {
-    let job = state.db.get_job(job_id).await.map_err(repo_to_internal)?;
-    let item = state.db.get_item(job.item_id).await.map_err(repo_to_item)?;
+    let job = state.db().get_job(job_id).await.map_err(repo_to_internal)?;
+    let item = state
+        .db()
+        .get_item(job.item_id)
+        .await
+        .map_err(repo_to_item)?;
     let revision = state
-        .db
+        .db()
         .get_revision(job.item_revision_id)
         .await
         .map_err(repo_to_internal)?;
     let project = state
-        .db
+        .db()
         .get_project(job.project_id)
         .await
         .map_err(repo_to_project)?;
@@ -326,7 +339,7 @@ pub(super) async fn refresh_revision_context_for_job_like(
     revision: &ItemRevision,
 ) -> Result<(), ApiError> {
     let jobs = state
-        .db
+        .db()
         .list_jobs_by_item(item.id)
         .await
         .map_err(repo_to_internal)?;
@@ -354,7 +367,7 @@ pub(super) async fn refresh_revision_context_for_job_like(
         Utc::now(),
     );
     state
-        .db
+        .db()
         .upsert_revision_context(&context)
         .await
         .map_err(repo_to_internal)?;

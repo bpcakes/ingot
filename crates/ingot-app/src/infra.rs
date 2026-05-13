@@ -19,29 +19,27 @@ use ingot_usecases::{
 };
 use ingot_workspace::ensure_authoring_workspace_state;
 
-use super::AppState;
-use super::support::errors::{
+use crate::ApplicationDatabase;
+use crate::errors::{
     ensure_git_valid_target_ref_usecase, git_to_usecase_error, workspace_to_usecase_error,
 };
 
-/// Adapter bridging infrastructure (ingot-git, ingot-workspace) to the
-/// `DispatchInfraPort` / `WorkspaceInfraPort` traits defined in ingot-usecases.
-pub(super) struct HttpInfraAdapter {
-    pub(super) state: AppState,
+#[derive(Clone)]
+pub(crate) struct ApplicationInfra {
+    db: ApplicationDatabase,
+    state_root: std::path::PathBuf,
 }
 
-impl HttpInfraAdapter {
-    pub(super) fn new(state: &AppState) -> Self {
-        Self {
-            state: state.clone(),
-        }
+impl ApplicationInfra {
+    pub(crate) fn new(db: ApplicationDatabase, state_root: std::path::PathBuf) -> Self {
+        Self { db, state_root }
     }
 
-    pub(super) async fn refresh_project_mirror(
+    pub(crate) async fn refresh_project_mirror(
         &self,
         project: &Project,
     ) -> Result<ProjectRepoPaths, UseCaseError> {
-        refresh_project_mirror_for_project(&self.state.db, self.state.state_root.as_path(), project)
+        refresh_project_mirror_for_project(&self.db, self.state_root.as_path(), project)
             .await
             .map_err(|error| match error {
                 ingot_git::project_repo::RefreshMirrorError::Repository(error) => {
@@ -53,12 +51,11 @@ impl HttpInfraAdapter {
             })
     }
 
-    pub(super) async fn mirror_paths(
+    pub(crate) async fn mirror_paths(
         &self,
         project_id: ProjectId,
     ) -> Result<ProjectRepoPaths, UseCaseError> {
         let project = self
-            .state
             .db
             .get_project(project_id)
             .await
@@ -66,7 +63,7 @@ impl HttpInfraAdapter {
         self.refresh_project_mirror(&project).await
     }
 
-    pub(super) async fn resolve_project_ref_oid(
+    pub(crate) async fn resolve_project_ref_oid(
         &self,
         project_id: ProjectId,
         ref_name: &GitRef,
@@ -77,7 +74,7 @@ impl HttpInfraAdapter {
             .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn changed_paths_between(
+    pub(crate) async fn changed_paths_between(
         &self,
         project_id: ProjectId,
         base_commit_oid: &CommitOid,
@@ -93,7 +90,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn is_commit_reachable_from_any_ref(
+    pub(crate) async fn is_commit_reachable_from_any_ref(
         &self,
         project_id: ProjectId,
         commit_oid: &CommitOid,
@@ -107,7 +104,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn is_commit_reachable_from_project(
+    pub(crate) async fn is_commit_reachable_from_project(
         &self,
         project: &Project,
         commit_oid: &CommitOid,
@@ -121,7 +118,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn ensure_authoring_workspace(
+    pub(crate) async fn ensure_authoring_workspace(
         &self,
         project_id: ProjectId,
         revision: &ItemRevision,
@@ -142,7 +139,7 @@ impl HttpInfraAdapter {
         .map_err(workspace_to_usecase_error)
     }
 
-    pub(super) async fn checkout_finalization_status(
+    pub(crate) async fn checkout_finalization_status(
         &self,
         project: &Project,
         target_ref: &GitRef,
@@ -159,7 +156,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn sync_checkout_to_prepared_commit(
+    pub(crate) async fn sync_checkout_to_prepared_commit(
         &self,
         project: &Project,
         target_ref: &GitRef,
@@ -176,7 +173,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn finalize_target_ref(
+    pub(crate) async fn finalize_target_ref(
         &self,
         project_id: ProjectId,
         ref_name: &GitRef,
@@ -194,7 +191,7 @@ impl HttpInfraAdapter {
         .map_err(git_to_usecase_error)
     }
 
-    pub(super) async fn remove_workspace_path(
+    pub(crate) async fn remove_workspace_path(
         &self,
         project_id: ProjectId,
         workspace_path: &Path,
@@ -242,7 +239,7 @@ impl HttpInfraAdapter {
     }
 }
 
-impl DispatchInfraPort for HttpInfraAdapter {
+impl DispatchInfraPort for ApplicationInfra {
     async fn resolve_ref_oid(
         &self,
         project_id: ProjectId,
@@ -285,18 +282,18 @@ impl DispatchInfraPort for HttpInfraAdapter {
         job: &Job,
         existing: Option<Workspace>,
     ) -> Result<Workspace, UseCaseError> {
-        HttpInfraAdapter::ensure_authoring_workspace(self, project_id, revision, job, existing)
+        ApplicationInfra::ensure_authoring_workspace(self, project_id, revision, job, existing)
             .await
     }
 }
 
-impl ApplicationInfraPort for HttpInfraAdapter {
+impl ApplicationInfraPort for ApplicationInfra {
     async fn ensure_valid_target_ref(&self, target_ref: &str) -> Result<(), UseCaseError> {
         ensure_git_valid_target_ref_usecase(target_ref).await
     }
 
     async fn refresh_project_mirror(&self, project: &Project) -> Result<(), UseCaseError> {
-        HttpInfraAdapter::refresh_project_mirror(self, project)
+        ApplicationInfra::refresh_project_mirror(self, project)
             .await
             .map(|_| ())
     }
@@ -306,7 +303,7 @@ impl ApplicationInfraPort for HttpInfraAdapter {
         project_id: ProjectId,
         ref_name: &GitRef,
     ) -> Result<Option<CommitOid>, UseCaseError> {
-        HttpInfraAdapter::resolve_project_ref_oid(self, project_id, ref_name).await
+        ApplicationInfra::resolve_project_ref_oid(self, project_id, ref_name).await
     }
 
     async fn is_commit_reachable_from_any_ref(
@@ -314,7 +311,7 @@ impl ApplicationInfraPort for HttpInfraAdapter {
         project_id: ProjectId,
         commit_oid: &CommitOid,
     ) -> Result<bool, UseCaseError> {
-        HttpInfraAdapter::is_commit_reachable_from_any_ref(self, project_id, commit_oid).await
+        ApplicationInfra::is_commit_reachable_from_any_ref(self, project_id, commit_oid).await
     }
 
     async fn is_commit_reachable_from_project(
@@ -322,7 +319,7 @@ impl ApplicationInfraPort for HttpInfraAdapter {
         project: &Project,
         commit_oid: &CommitOid,
     ) -> Result<bool, UseCaseError> {
-        HttpInfraAdapter::is_commit_reachable_from_project(self, project, commit_oid).await
+        ApplicationInfra::is_commit_reachable_from_project(self, project, commit_oid).await
     }
 
     async fn changed_paths_between(
@@ -331,7 +328,7 @@ impl ApplicationInfraPort for HttpInfraAdapter {
         base_commit_oid: &CommitOid,
         head_commit_oid: &CommitOid,
     ) -> Result<Vec<String>, UseCaseError> {
-        HttpInfraAdapter::changed_paths_between(self, project_id, base_commit_oid, head_commit_oid)
+        ApplicationInfra::changed_paths_between(self, project_id, base_commit_oid, head_commit_oid)
             .await
     }
 
@@ -340,11 +337,11 @@ impl ApplicationInfraPort for HttpInfraAdapter {
         project_id: ProjectId,
         workspace_path: &Path,
     ) -> Result<(), UseCaseError> {
-        HttpInfraAdapter::remove_workspace_path(self, project_id, workspace_path).await
+        ApplicationInfra::remove_workspace_path(self, project_id, workspace_path).await
     }
 }
 
-impl WorkspaceInfraPort for HttpInfraAdapter {
+impl WorkspaceInfraPort for ApplicationInfra {
     async fn reset_worktree(
         &self,
         project_id: ProjectId,

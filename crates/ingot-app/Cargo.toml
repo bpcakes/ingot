@@ -1,0 +1,20 @@
+[package]
+name = "ingot-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ingot-config = { workspace = true }
+ingot-domain = { workspace = true }
+ingot-git = { workspace = true }
+ingot-store-sqlite = { workspace = true }
+ingot-usecases = { workspace = true }
+ingot-workspace = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+ingot-test-support = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

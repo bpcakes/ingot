@@ -985,7 +985,6 @@ async fn revise_route_cancels_current_lane_state() {
                 .unwrap(),
             ref_name: Some("refs/ingot/workspaces/revise-source".into()),
             expected_old_oid: head.clone().into(),
-            new_oid: Some(head.clone().into()),
             commit_oid: Some(head.clone().into()),
             replay_metadata: None,
         },

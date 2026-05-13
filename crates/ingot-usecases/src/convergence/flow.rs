@@ -7,25 +7,12 @@ mod types {
     use ingot_domain::finding::Finding;
     use ingot_domain::git_operation::GitOperation;
     use ingot_domain::ids::{ItemId, ProjectId};
-    use ingot_domain::item::Item;
     use ingot_domain::job::Job;
     use ingot_domain::ports::FinalizationMutation;
     use ingot_domain::project::Project;
     use ingot_domain::revision::ItemRevision;
 
     use crate::UseCaseError;
-
-    #[derive(Debug, Clone)]
-    pub struct ConvergenceQueuePrepareContext {
-        pub project: Project,
-        pub item: Item,
-        pub revision: ItemRevision,
-        pub jobs: Vec<Job>,
-        pub findings: Vec<Finding>,
-        pub convergences: Vec<Convergence>,
-        pub active_queue_entry: Option<ConvergenceQueueEntry>,
-        pub lane_head: Option<ConvergenceQueueEntry>,
-    }
 
     #[derive(Debug, Clone)]
     pub struct SystemActionItemState {
@@ -86,71 +73,11 @@ mod types {
         Stale,
     }
 
-    #[derive(Debug, Clone, Default)]
-    pub struct RejectApprovalTeardown {
-        pub has_cancelled_convergence: bool,
-        pub has_cancelled_queue_entry: bool,
-        pub first_cancelled_convergence_id: Option<String>,
-        pub first_cancelled_queue_entry_id: Option<String>,
-    }
-
     #[derive(Debug, Clone)]
     pub struct RejectApprovalContext {
         pub item: ingot_domain::item::Item,
         pub has_active_job: bool,
         pub has_active_convergence: bool,
-    }
-
-    pub trait ConvergenceCommandPort: Send + Sync {
-        fn load_queue_prepare_context(
-            &self,
-            project_id: ProjectId,
-            item_id: ItemId,
-        ) -> impl Future<Output = Result<ConvergenceQueuePrepareContext, UseCaseError>> + Send;
-
-        fn create_queue_entry(
-            &self,
-            queue_entry: &ConvergenceQueueEntry,
-        ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
-
-        fn update_queue_entry(
-            &self,
-            queue_entry: &ConvergenceQueueEntry,
-        ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
-
-        fn append_activity(
-            &self,
-            activity: &ingot_domain::activity::Activity,
-        ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
-
-        fn load_approval_context(
-            &self,
-            project_id: ProjectId,
-            item_id: ItemId,
-        ) -> impl Future<Output = Result<ConvergenceApprovalContext, UseCaseError>> + Send;
-
-        fn update_item(
-            &self,
-            item: &ingot_domain::item::Item,
-        ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
-
-        fn load_reject_approval_context(
-            &self,
-            project_id: ProjectId,
-            item_id: ItemId,
-        ) -> impl Future<Output = Result<RejectApprovalContext, UseCaseError>> + Send;
-
-        fn teardown_reject_approval(
-            &self,
-            project_id: ProjectId,
-            item_id: ItemId,
-        ) -> impl Future<Output = Result<RejectApprovalTeardown, UseCaseError>> + Send;
-
-        fn apply_rejected_approval(
-            &self,
-            item: &ingot_domain::item::Item,
-            next_revision: &ItemRevision,
-        ) -> impl Future<Output = Result<(), UseCaseError>> + Send;
     }
 
     pub trait ConvergenceSystemActionPort: Send + Sync {
@@ -230,9 +157,9 @@ mod types {
 
 pub use types::{
     ApprovalFinalizeReadiness, CheckoutFinalizationReadiness, ConvergenceApprovalContext,
-    ConvergenceCommandPort, ConvergenceQueuePrepareContext, ConvergenceSystemActionPort,
-    FinalizePreparedTrigger, FinalizeTargetRefResult, PreparedConvergenceFinalizePort,
-    RejectApprovalContext, RejectApprovalTeardown, SystemActionItemState, SystemActionProjectState,
+    ConvergenceSystemActionPort, FinalizePreparedTrigger, FinalizeTargetRefResult,
+    PreparedConvergenceFinalizePort, RejectApprovalContext, SystemActionItemState,
+    SystemActionProjectState,
 };
 
 mod context {

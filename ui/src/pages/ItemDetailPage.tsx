@@ -23,6 +23,7 @@ import {
   RevisionContextPanel,
   WorkflowStepper,
 } from '../components/item-detail'
+import { workflowPresentationLookup } from '../components/item-detail/workflowPresentation'
 import { PageQueryError } from '../components/PageQueryError'
 import { ItemDetailSkeleton } from '../components/PageSkeletons'
 import { Prose } from '../components/Prose'
@@ -189,6 +190,10 @@ export default function ItemDetailPage(): React.JSX.Element {
       { id: 'diagnostics', label: 'Diagnostics', count: detail.diagnostics.length },
     ].filter((s) => s.count > 0)
   }, [detail])
+  const workflowPresentations = useMemo(
+    () => (detail ? workflowPresentationLookup(detail.workflow_presentations) : null),
+    [detail],
+  )
 
   const sectionIds = useMemo(() => sections.map((s) => s.id), [sections])
   const activeSectionId = useSectionObserver(sectionIds)
@@ -197,7 +202,7 @@ export default function ItemDetailPage(): React.JSX.Element {
   if (isError) {
     return <PageQueryError title="Item detail failed to load" error={error} onRetry={refetch} isRetrying={isFetching} />
   }
-  if (!detail) return <p>Item not found.</p>
+  if (!detail || !workflowPresentations) return <p>Item not found.</p>
 
   const {
     item,
@@ -207,6 +212,7 @@ export default function ItemDetailPage(): React.JSX.Element {
     revision_context_summary: revisionContextSummary,
     diagnostics,
   } = detail
+  const workflowPresentation = workflowPresentations[item.workflow_version]
 
   return (
     <div className="space-y-5">
@@ -280,7 +286,7 @@ export default function ItemDetailPage(): React.JSX.Element {
       </Collapsible>
 
       <WorkflowStepper
-        workflowVersion={item.workflow_version}
+        workflowPresentation={workflowPresentation}
         currentStepId={evaluation.current_step_id}
         dispatchableStepId={evaluation.dispatchable_step_id}
       />
@@ -351,6 +357,7 @@ export default function ItemDetailPage(): React.JSX.Element {
             jobs={detail.jobs}
             linkedFindingItems={detail.linked_finding_items}
             workflowVersion={item.workflow_version}
+            workflowPresentations={workflowPresentations}
             pendingFindingId={
               promoteMutation.isPending
                 ? (promoteMutation.variables?.findingId ?? null)

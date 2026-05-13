@@ -17,7 +17,7 @@ pub(crate) async fn append_activity(
     let payload_for_event = payload.clone();
     let subject_for_event = subject.clone();
     state
-        .db
+        .db()
         .append_activity(&Activity {
             id: ActivityId::new(),
             project_id,
@@ -28,7 +28,7 @@ pub(crate) async fn append_activity(
         })
         .await
         .map_err(repo_to_internal)?;
-    state.ui_events.publish_entity_changed(
+    state.ui_events().publish_entity_changed(
         project_id,
         event_type,
         subject_for_event,

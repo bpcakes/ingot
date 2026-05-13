@@ -222,7 +222,7 @@ pub async fn create_demo_project(
     };
 
     state
-        .db
+        .db()
         .create_project(&project)
         .await
         .map_err(repo_to_project_mutation)?;
@@ -239,7 +239,7 @@ pub async fn create_demo_project(
         .ok_or_else(|| UseCaseError::TargetRefUnresolved(target_ref.to_string()))?;
 
     let _guard = state
-        .project_locks
+        .project_locks()
         .acquire_project_mutation(project.id)
         .await;
 
@@ -272,7 +272,7 @@ pub async fn create_demo_project(
         );
 
         state
-            .db
+            .db()
             .create_item_with_revision(&item, &revision)
             .await
             .map_err(repo_to_internal)?;

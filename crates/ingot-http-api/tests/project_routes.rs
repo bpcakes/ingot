@@ -271,7 +271,7 @@ async fn update_project_route_waits_for_project_mutation_lock() {
     ensure_mirror(&paths).await.expect("ensure mirror");
 
     let locks = ProjectLocks::default();
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         locks.clone(),
         state_root,
@@ -433,7 +433,7 @@ async fn update_project_route_does_not_overwrite_fields_changed_while_waiting_fo
     ensure_mirror(&paths).await.expect("ensure mirror");
 
     let locks = ProjectLocks::default();
-    let app = ingot_http_api::build_router_with_project_locks_and_state_root(
+    let app = build_router_with_project_locks_and_state_root(
         db.clone(),
         locks.clone(),
         state_root,

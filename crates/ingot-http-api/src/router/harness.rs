@@ -25,7 +25,7 @@ pub(super) async fn get_harness_profile(
     ApiPath(ProjectPathParams { project_id }): ApiPath<ProjectPathParams>,
 ) -> Result<Json<HarnessProfile>, ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
@@ -39,7 +39,7 @@ pub(super) async fn put_harness_profile(
     body: String,
 ) -> Result<impl IntoResponse, ApiError> {
     let project = state
-        .db
+        .db()
         .get_project(project_id)
         .await
         .map_err(repo_to_project)?;
