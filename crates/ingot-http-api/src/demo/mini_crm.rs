@@ -134,6 +134,38 @@ cd client && npm install && npx vite
 ",
         },
         DemoStack {
+            slug: "axum-react",
+            label: "Rust (axum) + React",
+            seed_readme: "\
+# Mini CRM
+
+A small CRM to manage companies and contacts.
+
+## Tech Stack
+
+- **Backend:** Rust + axum (server/) — port 3001, tower-http CORS, JSON via serde
+- **Database:** SQLite via sqlx (async, runtime-tokio-rustls)
+- **Frontend:** React + Vite (client/) — dev proxy forwarding /api to :3001
+
+## Getting Started
+
+```bash
+# Backend
+cd server && cargo run
+
+# Frontend (separate terminal)
+cd client && npm install && npx vite
+```
+
+## Conventions
+
+- Route handlers in server/src/routes/, registered in server/src/main.rs
+- Database module: server/src/db.rs (sqlx::SqlitePool, CREATE TABLE IF NOT EXISTS on init)
+- Domain types in server/src/models.rs with serde derives
+- React pages in client/src/pages/, components in client/src/components/
+",
+        },
+        DemoStack {
             slug: "rails",
             label: "Rails",
             seed_readme: "\

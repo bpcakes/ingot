@@ -119,6 +119,11 @@ impl ConvergenceBuilder {
         self
     }
 
+    pub fn conflict_summary(mut self, summary: impl Into<String>) -> Self {
+        self.conflict_summary = Some(summary.into());
+        self
+    }
+
     pub fn completed_at(mut self, completed_at: DateTime<Utc>) -> Self {
         self.completed_at = Some(completed_at);
         self

@@ -1,6 +1,9 @@
-use ingot_domain::convergence::Convergence;
+use std::collections::HashMap;
+
+use ingot_domain::convergence::{Convergence, ConvergenceStatus};
 use ingot_domain::finding::Finding;
-use ingot_domain::ids::{ItemId, ProjectId};
+use ingot_domain::git_operation::ConvergenceConflictMetadata;
+use ingot_domain::ids::{ConvergenceId, ItemId, ProjectId};
 use ingot_domain::item::Item;
 use ingot_domain::project::Project;
 use ingot_usecases::UseCaseError;
@@ -68,6 +71,7 @@ pub(super) async fn load_item_detail(
         convergences,
     } = snapshot;
     let linked_finding_items = load_linked_finding_items(state, &project, &findings).await?;
+    let mut convergence_conflicts = load_convergence_conflicts(state, &convergences).await?;
 
     Ok(ItemDetailResponse {
         item,
@@ -82,10 +86,56 @@ pub(super) async fn load_item_detail(
         findings,
         linked_finding_items,
         workspaces,
-        convergences: convergences.into_iter().map(convergence_response).collect(),
+        convergences: convergences
+            .into_iter()
+            .map(|convergence| {
+                let conflict = convergence_conflicts.remove(&convergence.id);
+                convergence_response(convergence, conflict)
+            })
+            .collect(),
         revision_context_summary,
         diagnostics,
     })
+}
+
+async fn load_convergence_conflicts(
+    state: &AppState,
+    convergences: &[Convergence],
+) -> Result<HashMap<ConvergenceId, ConvergenceConflictMetadata>, ApiError> {
+    let mut conflicts = HashMap::new();
+    let convergence_ids = convergences
+        .iter()
+        .filter(|convergence| convergence.state.status() == ConvergenceStatus::Conflicted)
+        .map(|convergence| convergence.id)
+        .collect::<Vec<_>>();
+    if convergence_ids.is_empty() {
+        return Ok(conflicts);
+    }
+
+    let operations = state
+        .db()
+        .list_latest_failed_prepare_for_convergences(&convergence_ids)
+        .await
+        .map_err(repo_to_internal)?;
+
+    for operation in operations {
+        let ingot_domain::git_operation::GitOperationEntityRef::Convergence(convergence_id) =
+            operation.entity
+        else {
+            continue;
+        };
+        let Some(conflict) = operation
+            .payload
+            .replay_metadata()
+            .and_then(|metadata| metadata.conflict.clone())
+        else {
+            continue;
+        };
+
+        conflicts.insert(convergence_id, conflict);
+    }
+
+    Ok(conflicts)
 }
 
 async fn load_linked_finding_items(
@@ -158,14 +208,46 @@ pub(super) async fn evaluate_item_snapshot(
     ))
 }
 
-fn convergence_response(convergence: Convergence) -> ConvergenceResponse {
+fn convergence_response(
+    convergence: Convergence,
+    conflict: Option<ConvergenceConflictMetadata>,
+) -> ConvergenceResponse {
+    let conflict_summary = (convergence.state.status() == ConvergenceStatus::Conflicted)
+        .then(|| convergence.state.conflict_summary().map(str::to_owned))
+        .flatten();
+    let failure_summary = (convergence.state.status() == ConvergenceStatus::Failed)
+        .then(|| convergence.state.conflict_summary().map(str::to_owned))
+        .flatten();
     ConvergenceResponse {
         id: convergence.id,
         status: convergence.state.status(),
         input_target_commit_oid: convergence.state.input_target_commit_oid().cloned(),
         prepared_commit_oid: convergence.state.prepared_commit_oid().cloned(),
         final_target_commit_oid: convergence.state.final_target_commit_oid().cloned(),
+        conflict_summary,
+        failure_summary,
+        conflict: (convergence.state.status() == ConvergenceStatus::Conflicted)
+            .then(|| conflict.map(conflict_response))
+            .flatten(),
         target_head_valid: convergence.target_head_valid.unwrap_or(true),
+    }
+}
+
+fn conflict_response(conflict: ConvergenceConflictMetadata) -> ConvergenceConflictResponse {
+    ConvergenceConflictResponse {
+        failed_source_commit_oid: conflict.failed_source_commit_oid,
+        git_error: conflict.git_error,
+        total_file_count: conflict.total_file_count,
+        files_truncated: conflict.files_truncated,
+        files: conflict
+            .files
+            .into_iter()
+            .map(|file| ConvergenceConflictFileResponse {
+                path: file.path,
+                stages: file.stages,
+                excerpt: file.excerpt,
+            })
+            .collect(),
     }
 }
 
@@ -197,6 +279,10 @@ mod tests {
 
     use crate::router::test_helpers::test_app_state;
     use chrono::Utc;
+    use ingot_domain::commit_oid::CommitOid;
+    use ingot_domain::git_operation::{
+        ConvergenceConflictFile, ConvergenceConflictMetadata, ConvergenceConflictStage,
+    };
     use ingot_domain::ids::{ItemId, ItemRevisionId, ProjectId};
     use ingot_domain::test_support::{ConvergenceBuilder, ProjectBuilder};
     use ingot_test_support::git::{
@@ -269,5 +355,89 @@ mod tests {
         .await
         .expect("compute stale validity");
         assert_eq!(stale[0].target_head_valid, Some(false));
+    }
+
+    #[test]
+    fn convergence_response_includes_conflict_summary() {
+        let convergence = ConvergenceBuilder::new(
+            ProjectId::from_uuid(Uuid::nil()),
+            ItemId::from_uuid(Uuid::nil()),
+            ItemRevisionId::from_uuid(Uuid::nil()),
+        )
+        .status(ingot_domain::convergence::ConvergenceStatus::Conflicted)
+        .conflict_summary("tracked.txt conflicted")
+        .build();
+
+        let response = super::convergence_response(convergence, None);
+
+        assert_eq!(
+            response.conflict_summary.as_deref(),
+            Some("tracked.txt conflicted")
+        );
+        assert!(response.conflict.is_none());
+    }
+
+    #[test]
+    fn convergence_response_includes_conflict_metadata() {
+        let convergence = ConvergenceBuilder::new(
+            ProjectId::from_uuid(Uuid::nil()),
+            ItemId::from_uuid(Uuid::nil()),
+            ItemRevisionId::from_uuid(Uuid::nil()),
+        )
+        .status(ingot_domain::convergence::ConvergenceStatus::Conflicted)
+        .conflict_summary("tracked.txt conflicted")
+        .build();
+        let conflict = ConvergenceConflictMetadata {
+            failed_source_commit_oid: CommitOid::new("0123456789abcdef"),
+            git_error: "git failed".into(),
+            total_file_count: 1,
+            files_truncated: false,
+            files: vec![ConvergenceConflictFile {
+                path: "tracked.txt".into(),
+                stages: vec![
+                    ConvergenceConflictStage::Ours,
+                    ConvergenceConflictStage::Theirs,
+                ],
+                excerpt: Some("<<<<<<< ours".into()),
+            }],
+        };
+
+        let response = super::convergence_response(convergence, Some(conflict));
+        let conflict = response.conflict.expect("conflict metadata");
+
+        assert_eq!(conflict.total_file_count, 1);
+        assert_eq!(conflict.files[0].path, "tracked.txt");
+        assert_eq!(
+            conflict.files[0].stages,
+            vec![
+                ConvergenceConflictStage::Ours,
+                ConvergenceConflictStage::Theirs
+            ]
+        );
+    }
+
+    #[test]
+    fn convergence_response_exposes_failed_summary_without_labeling_it_as_conflict() {
+        let mut convergence = ConvergenceBuilder::new(
+            ProjectId::from_uuid(Uuid::nil()),
+            ItemId::from_uuid(Uuid::nil()),
+            ItemRevisionId::from_uuid(Uuid::nil()),
+        )
+        .status(ingot_domain::convergence::ConvergenceStatus::Running)
+        .build();
+        convergence.transition_to_failed(Some("prepare convergence failed".into()), Utc::now());
+
+        let response = super::convergence_response(convergence, None);
+
+        assert_eq!(
+            response.status,
+            ingot_domain::convergence::ConvergenceStatus::Failed
+        );
+        assert_eq!(response.conflict_summary, None);
+        assert_eq!(
+            response.failure_summary.as_deref(),
+            Some("prepare convergence failed")
+        );
+        assert!(response.conflict.is_none());
     }
 }

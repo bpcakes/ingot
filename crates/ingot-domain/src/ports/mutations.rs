@@ -10,7 +10,7 @@ use crate::finding::Finding;
 use crate::git_operation::GitOperation;
 use crate::git_ref::GitRef;
 use crate::ids::*;
-use crate::item::{ApprovalState, Item, ResolutionSource};
+use crate::item::{ApprovalState, Escalation, Item, ResolutionSource};
 use crate::job::Job;
 use crate::project::Project;
 use crate::revision::ItemRevision;
@@ -116,6 +116,33 @@ pub trait InvalidatePreparedConvergenceRepository: Send + Sync {
     fn apply_invalidate_prepared_convergence(
         &self,
         mutation: InvalidatePreparedConvergenceMutation,
+    ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
+}
+
+// --- Prepare convergence failure transition types ---
+
+#[derive(Debug, Clone)]
+pub struct ItemEscalationPatch {
+    pub id: ItemId,
+    pub approval_state: ApprovalState,
+    pub escalation: Escalation,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrepareConvergenceFailureMutation {
+    pub workspace: Workspace,
+    pub convergence: Convergence,
+    pub item: ItemEscalationPatch,
+    pub queue_entry: ConvergenceQueueEntry,
+    pub git_operation: GitOperation,
+    pub activities: Vec<Activity>,
+}
+
+pub trait PrepareConvergenceFailureRepository: Send + Sync {
+    fn apply_prepare_convergence_failure(
+        &self,
+        mutation: PrepareConvergenceFailureMutation,
     ) -> impl Future<Output = Result<(), RepositoryError>> + Send;
 }
 

@@ -9,18 +9,21 @@ use ingot_domain::job::{
     ContextPolicy, ExecutionPermission, JobInput, JobStatus, OutcomeClass, OutputArtifactKind,
     PhaseKind,
 };
-use ingot_domain::revision::ApprovalPolicy;
+use ingot_domain::revision::{ApprovalPolicy, AuthoringBaseSeed};
 use ingot_domain::step_id::StepId;
 use ingot_domain::workspace::{WorkspaceKind, WorkspaceStatus};
 use ingot_git::commands::{head_oid, resolve_ref_oid};
-use ingot_usecases::{DispatchNotify, ProjectLocks};
+use ingot_usecases::{DispatchNotify, ProjectLocks, UiEvent, UiEventBus};
 
 mod common;
 use common::*;
-use ingot_domain::activity::ActivityEventType;
+use ingot_domain::activity::{ActivityEventType, ActivitySubject};
 use ingot_domain::convergence::ConvergenceStatus;
 use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
-use ingot_domain::git_operation::{GitOperationEntityRef, GitOperationStatus, OperationKind};
+use ingot_domain::git_operation::{
+    ConvergenceConflictStage, ConvergenceReplayMetadata, GitOperationEntityRef, GitOperationStatus,
+    OperationKind,
+};
 use ingot_domain::test_support::{
     GitOperationBuilder, JobBuilder, ProjectBuilder, RevisionBuilder, WorkspaceBuilder,
 };
@@ -1015,7 +1018,145 @@ async fn fail_prepare_convergence_attempt_marks_non_conflict_failures_as_step_fa
         .await
         .expect("create git operation");
 
+    let long_failure_summary = "x".repeat(3_000);
     h.dispatcher
+        .fail_prepare_convergence_attempt(
+            &h.project,
+            &item,
+            &revision,
+            &queue_entry,
+            &mut integration_workspace,
+            &mut convergence,
+            &mut operation,
+            &[CommitOid::new(seed_commit.clone())],
+            &[],
+            long_failure_summary,
+            ingot_domain::convergence::PrepareFailureKind::Failed,
+            None,
+        )
+        .await
+        .expect("fail prepare attempt");
+
+    let updated_item = h.db.get_item(item.id).await.expect("item");
+    assert!(matches!(
+        updated_item.escalation,
+        Escalation::OperatorRequired {
+            reason: EscalationReason::StepFailed
+        }
+    ));
+    let updated_convergence =
+        h.db.get_convergence(convergence.id)
+            .await
+            .expect("convergence");
+    let failure_summary = updated_convergence
+        .state
+        .conflict_summary()
+        .expect("failure summary");
+    assert!(failure_summary.len() <= 2 * 1024);
+    assert!(!failure_summary.ends_with("\n[truncated]"));
+
+    let activity =
+        h.db.list_activity_by_project(h.project.id, 20, 0)
+            .await
+            .expect("activity");
+    assert!(
+        activity.iter().any(|row| {
+            row.event_type == ActivityEventType::ItemEscalated
+                && row.payload.get("reason").and_then(|value| value.as_str()) == Some("step_failed")
+        }),
+        "item escalation activity should carry the step_failed reason"
+    );
+}
+
+#[tokio::test]
+async fn fail_prepare_convergence_attempt_leaves_locals_unchanged_when_persistence_fails() {
+    let h = TestHarness::new(Arc::new(FakeRunner)).await;
+
+    let seed_commit = head_oid(&h.repo_path)
+        .await
+        .expect("seed head")
+        .into_inner();
+    let item_id = ingot_domain::ids::ItemId::new();
+    let revision_id = ingot_domain::ids::ItemRevisionId::new();
+    let item = ItemBuilder::new(h.project.id, revision_id)
+        .id(item_id)
+        .approval_state(ApprovalState::NotRequired)
+        .build();
+    let revision = RevisionBuilder::new(item_id)
+        .id(revision_id)
+        .approval_policy(ingot_domain::revision::ApprovalPolicy::NotRequired)
+        .explicit_seed(seed_commit.as_str())
+        .build();
+    h.db.create_item_with_revision(&item, &revision)
+        .await
+        .expect("create item");
+
+    let created_at = default_timestamp();
+    let mut integration_workspace = WorkspaceBuilder::new(h.project.id, WorkspaceKind::Integration)
+        .created_for_revision_id(revision.id)
+        .base_commit_oid(seed_commit.clone())
+        .head_commit_oid(seed_commit.clone())
+        .status(WorkspaceStatus::Provisioning)
+        .created_at(created_at)
+        .build();
+    h.db.create_workspace(&integration_workspace)
+        .await
+        .expect("create integration workspace");
+    let source_workspace = WorkspaceBuilder::new(h.project.id, WorkspaceKind::Authoring)
+        .created_for_revision_id(revision.id)
+        .base_commit_oid(seed_commit.clone())
+        .head_commit_oid(seed_commit.clone())
+        .created_at(created_at)
+        .build();
+    h.db.create_workspace(&source_workspace)
+        .await
+        .expect("create source workspace");
+
+    let mut convergence = ConvergenceBuilder::new(h.project.id, item_id, revision_id)
+        .source_workspace_id(source_workspace.id)
+        .integration_workspace_id(integration_workspace.id)
+        .source_head_commit_oid(seed_commit.clone())
+        .status(ConvergenceStatus::Running)
+        .input_target_commit_oid(seed_commit.clone())
+        .no_prepared_commit_oid()
+        .target_head_valid(true)
+        .created_at(created_at)
+        .build();
+    h.db.create_convergence(&convergence)
+        .await
+        .expect("create convergence");
+    let queue_entry = ConvergenceQueueEntryBuilder::new(h.project.id, item_id, revision.id)
+        .created_at(created_at)
+        .build();
+    h.db.create_queue_entry(&queue_entry)
+        .await
+        .expect("create queue entry");
+    let mut operation = GitOperationBuilder::new(
+        h.project.id,
+        OperationKind::PrepareConvergenceCommit,
+        GitOperationEntityRef::Convergence(convergence.id),
+    )
+    .workspace_id(integration_workspace.id)
+    .ref_name(
+        integration_workspace
+            .workspace_ref
+            .clone()
+            .expect("workspace ref"),
+    )
+    .expected_old_oid(seed_commit.clone())
+    .status(GitOperationStatus::Planned)
+    .metadata(serde_json::json!({
+        "source_commit_oids": [seed_commit.clone()],
+        "prepared_commit_oids": [],
+    }))
+    .created_at(created_at)
+    .build();
+    let original_workspace = integration_workspace.clone();
+    let original_convergence = convergence.clone();
+    let original_operation = operation.clone();
+
+    let result = h
+        .dispatcher
         .fail_prepare_convergence_attempt(
             &h.project,
             &item,
@@ -1028,27 +1169,267 @@ async fn fail_prepare_convergence_attempt_marks_non_conflict_failures_as_step_fa
             &[],
             "non-conflict failure".into(),
             ingot_domain::convergence::PrepareFailureKind::Failed,
+            None,
         )
+        .await;
+
+    assert!(result.is_err(), "missing git operation should fail");
+    assert_eq!(
+        integration_workspace.state.status(),
+        original_workspace.state.status()
+    );
+    assert_eq!(
+        convergence.state.status(),
+        original_convergence.state.status()
+    );
+    assert_eq!(operation.status, original_operation.status);
+    assert_eq!(operation.completed_at, original_operation.completed_at);
+}
+
+#[tokio::test]
+async fn prepare_convergence_conflict_records_structured_context_and_releases_lane() {
+    let ui_events = UiEventBus::default();
+    let mut ui_rx = ui_events.subscribe();
+    let h = TestHarness::with_config_and_events(Arc::new(FakeRunner), None, ui_events).await;
+
+    let base_commit = head_oid(&h.repo_path)
         .await
-        .expect("fail prepare attempt");
+        .expect("base head")
+        .into_inner();
+    git_sync(&h.repo_path, &["checkout", "-b", "feature-conflict"]);
+    std::fs::write(h.repo_path.join("tracked.txt"), "feature edit\n").expect("write feature");
+    git_sync(&h.repo_path, &["add", "tracked.txt"]);
+    git_sync(&h.repo_path, &["commit", "-m", "feature edit"]);
+    let feature_commit = head_oid(&h.repo_path)
+        .await
+        .expect("feature head")
+        .into_inner();
+    git_sync(&h.repo_path, &["checkout", "main"]);
+    std::fs::write(h.repo_path.join("tracked.txt"), "target edit\n").expect("write target");
+    git_sync(&h.repo_path, &["add", "tracked.txt"]);
+    git_sync(&h.repo_path, &["commit", "-m", "target edit"]);
+
+    let created_at = default_timestamp();
+    let item_id = ingot_domain::ids::ItemId::new();
+    let revision_id = ingot_domain::ids::ItemRevisionId::new();
+    let item = ItemBuilder::new(h.project.id, revision_id)
+        .id(item_id)
+        .approval_state(ApprovalState::NotRequested)
+        .build();
+    let revision = RevisionBuilder::new(item_id)
+        .id(revision_id)
+        .seed(AuthoringBaseSeed::Implicit {
+            seed_target_commit_oid: CommitOid::new(base_commit.clone()),
+        })
+        .build();
+    h.db.create_item_with_revision(&item, &revision)
+        .await
+        .expect("create item");
+
+    let authoring_workspace = WorkspaceBuilder::new(h.project.id, WorkspaceKind::Authoring)
+        .created_for_revision_id(revision.id)
+        .base_commit_oid(base_commit.clone())
+        .head_commit_oid(feature_commit.clone())
+        .workspace_ref("refs/heads/feature-conflict")
+        .created_at(created_at)
+        .build();
+    h.db.create_workspace(&authoring_workspace)
+        .await
+        .expect("create authoring workspace");
+
+    let validate_job = JobBuilder::new(
+        h.project.id,
+        item.id,
+        revision.id,
+        StepId::ValidateCandidateInitial,
+    )
+    .status(JobStatus::Completed)
+    .outcome_class(OutcomeClass::Clean)
+    .phase_kind(PhaseKind::Validate)
+    .workspace_kind(WorkspaceKind::Authoring)
+    .execution_permission(ExecutionPermission::MustNotMutate)
+    .context_policy(ContextPolicy::ResumeContext)
+    .phase_template_slug("validate-candidate")
+    .job_input(JobInput::candidate_subject(
+        CommitOid::new(base_commit.clone()),
+        CommitOid::new(feature_commit.clone()),
+    ))
+    .output_artifact_kind(OutputArtifactKind::ValidationReport)
+    .result_schema_version("validation_report:v1")
+    .result_payload(serde_json::json!({
+        "outcome": "clean",
+        "summary": "candidate clean",
+        "checks": [],
+        "findings": []
+    }))
+    .created_at(created_at)
+    .started_at(created_at)
+    .ended_at(created_at)
+    .build();
+    h.db.create_job(&validate_job)
+        .await
+        .expect("create validate job");
+
+    let queue_entry = ConvergenceQueueEntryBuilder::new(h.project.id, item.id, revision.id)
+        .created_at(created_at)
+        .build();
+    h.db.create_queue_entry(&queue_entry)
+        .await
+        .expect("create queue entry");
+
+    assert!(
+        h.dispatcher.tick().await.expect("tick should prepare"),
+        "dispatcher should make progress by running convergence prepare"
+    );
 
     let updated_item = h.db.get_item(item.id).await.expect("item");
     assert!(matches!(
         updated_item.escalation,
         Escalation::OperatorRequired {
-            reason: EscalationReason::StepFailed
+            reason: EscalationReason::ConvergenceConflict
         }
     ));
+    assert_eq!(updated_item.approval_state, ApprovalState::NotRequested);
+
+    let convergence =
+        h.db.list_convergences_by_item(item.id)
+            .await
+            .expect("convergences")
+            .into_iter()
+            .next()
+            .expect("convergence");
+    assert_eq!(convergence.state.status(), ConvergenceStatus::Conflicted);
+    let summary = convergence
+        .state
+        .conflict_summary()
+        .expect("conflict summary");
+    assert!(summary.contains("tracked.txt"), "summary was: {summary}");
+    assert!(
+        summary.contains("Cherry-pick conflict"),
+        "summary should identify the replay failure"
+    );
+
+    let queue_entries =
+        h.db.list_queue_entries_by_item(item.id)
+            .await
+            .expect("queue entries");
+    assert_eq!(
+        queue_entries[0].status,
+        ConvergenceQueueEntryStatus::Released
+    );
+
+    let workspaces =
+        h.db.list_workspaces_by_item(item.id)
+            .await
+            .expect("workspaces");
+    let integration_workspace = workspaces
+        .iter()
+        .find(|workspace| workspace.kind == WorkspaceKind::Integration)
+        .expect("integration workspace");
+    assert_eq!(integration_workspace.state.status(), WorkspaceStatus::Error);
+
+    let (status, metadata): (String, String) = sqlx::query_as(
+        "SELECT status, metadata
+         FROM git_operations
+         WHERE operation_kind = 'prepare_convergence_commit'
+           AND entity_type = 'convergence'
+           AND entity_id = ?",
+    )
+    .bind(convergence.id.to_string())
+    .fetch_one(h.db.raw_pool())
+    .await
+    .expect("prepare operation metadata");
+    assert_eq!(status, "failed");
+    let metadata: ConvergenceReplayMetadata =
+        serde_json::from_str(&metadata).expect("replay metadata");
+    let conflict = metadata.conflict.expect("conflict metadata");
+    assert_eq!(
+        conflict.failed_source_commit_oid,
+        CommitOid::new(feature_commit)
+    );
+    assert_eq!(conflict.total_file_count, 1);
+    assert!(!conflict.files_truncated);
+    let tracked_file = conflict
+        .files
+        .iter()
+        .find(|file| file.path == "tracked.txt")
+        .expect("conflict metadata should include tracked.txt");
+    assert!(
+        tracked_file
+            .excerpt
+            .as_deref()
+            .is_some_and(|excerpt| excerpt.contains("<<<<<<<")),
+        "conflict metadata should include marker excerpt: {:?}",
+        tracked_file.excerpt
+    );
+    assert_eq!(
+        tracked_file.stages,
+        vec![
+            ConvergenceConflictStage::Base,
+            ConvergenceConflictStage::Ours,
+            ConvergenceConflictStage::Theirs
+        ]
+    );
+
     let activity =
         h.db.list_activity_by_project(h.project.id, 20, 0)
             .await
             .expect("activity");
     assert!(
+        activity
+            .iter()
+            .any(|row| row.event_type == ActivityEventType::ConvergenceConflicted),
+        "convergence conflict activity should be written atomically with state"
+    );
+    assert!(
         activity.iter().any(|row| {
             row.event_type == ActivityEventType::ItemEscalated
-                && row.payload.get("reason").and_then(|value| value.as_str()) == Some("step_failed")
+                && row
+                    .payload
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("convergence_conflict")
         }),
-        "item escalation activity should carry the step_failed reason"
+        "item escalation activity should use the serialized convergence_conflict reason"
+    );
+
+    let entity_events = timeout(Duration::from_secs(5), async {
+        let mut events = Vec::new();
+        loop {
+            let envelope = ui_rx.recv().await.expect("ui event");
+            let UiEvent::EntityChanged(event) = envelope.event else {
+                continue;
+            };
+            if event.project_id != h.project.id {
+                continue;
+            }
+
+            events.push(event);
+            let saw_conflict = events.iter().any(|event| {
+                event.event_type == ActivityEventType::ConvergenceConflicted
+                    && event.subject == ActivitySubject::Convergence(convergence.id)
+            });
+            let saw_item_escalated = events.iter().any(|event| {
+                event.event_type == ActivityEventType::ItemEscalated
+                    && event.subject == ActivitySubject::Item(item.id)
+            });
+            if saw_conflict && saw_item_escalated {
+                break events;
+            }
+        }
+    })
+    .await
+    .expect("failure UI events should be published after commit");
+    assert!(
+        entity_events.iter().any(|event| {
+            event.event_type == ActivityEventType::ConvergenceConflicted
+                && event
+                    .payload
+                    .get("summary")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|summary| summary.contains("tracked.txt"))
+        }),
+        "conflict UI event should include the persisted summary"
     );
 }
 

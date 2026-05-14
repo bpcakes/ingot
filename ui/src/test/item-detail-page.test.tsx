@@ -440,10 +440,51 @@ describe('ItemDetailPage', () => {
     detail.convergences = [
       {
         id: 'cnv_1',
-        status: 'prepared',
+        status: 'conflicted',
         input_target_commit_oid: 'aaaaaaaa11111111',
-        prepared_commit_oid: 'bbbbbbbb22222222',
-        final_target_commit_oid: 'cccccccc33333333',
+        prepared_commit_oid: null,
+        final_target_commit_oid: null,
+        conflict_summary: 'tracked.txt conflicted while replaying abc123',
+        failure_summary: null,
+        conflict: {
+          failed_source_commit_oid: 'abc123456789',
+          git_error: 'git failed',
+          total_file_count: 5,
+          files_truncated: true,
+          files: [
+            {
+              path: 'tracked.txt',
+              stages: ['ours', 'theirs'],
+              excerpt: '<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs',
+            },
+            {
+              path: 'src/app.ts',
+              stages: ['base', 'ours', 'theirs'],
+              excerpt: null,
+            },
+            {
+              path: 'src/api.ts',
+              stages: ['ours', 'theirs'],
+              excerpt: null,
+            },
+            {
+              path: 'src/router.ts',
+              stages: ['ours', 'theirs'],
+              excerpt: null,
+            },
+          ],
+        },
+        target_head_valid: true,
+      },
+      {
+        id: 'cnv_2',
+        status: 'failed',
+        input_target_commit_oid: 'aaaaaaaa11111111',
+        prepared_commit_oid: null,
+        final_target_commit_oid: null,
+        conflict_summary: null,
+        failure_summary: 'prepare convergence failed',
+        conflict: null,
         target_head_valid: true,
       },
     ]
@@ -492,11 +533,21 @@ describe('ItemDetailPage', () => {
     // Section nav buttons
     expect(screen.getByRole('button', { name: /Jobs\s*1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Findings\s*1/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Convergences\s*1/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Convergences\s*2/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Revision Context\s*1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Diagnostics\s*1/ })).toBeInTheDocument()
     expect(screen.getByText('Mar 12, 2026, 12:00 AM UTC')).toBeInTheDocument()
     expect(screen.getByText('Missing regression coverage')).toBeInTheDocument()
+    expect(screen.getByText('tracked.txt conflicted while replaying abc123')).toBeInTheDocument()
+    expect(screen.getByText('prepare convergence failed')).toBeInTheDocument()
+    expect(
+      screen.getByText((_content, element) => element?.textContent === 'source abc12345 - 5 files, list truncated'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('tracked.txt')).toBeInTheDocument()
+    expect(
+      screen.getByText((_content, element) => element?.textContent === 'tracked.txt - ours/theirs'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('+1 more recorded, +1 not loaded')).toBeInTheDocument()
     expect(screen.getByText('validate_initial:clean')).toBeInTheDocument()
     expect(screen.getByText('detail diagnostic')).toBeInTheDocument()
     // Acceptance criteria collapsible trigger

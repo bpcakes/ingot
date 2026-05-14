@@ -11,6 +11,7 @@ mod invalidate_prepared_convergence;
 mod item;
 mod job;
 mod job_completion;
+mod prepare_convergence_failure;
 mod project;
 mod revision;
 mod revision_lane_teardown;

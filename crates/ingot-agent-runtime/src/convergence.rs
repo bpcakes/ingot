@@ -3,19 +3,23 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use ingot_domain::activity::{ActivityEventType, ActivitySubject};
+use ingot_domain::activity::{Activity, ActivityEventType, ActivitySubject};
 use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::convergence::{Convergence, ConvergenceStatus, PrepareFailureKind};
 use ingot_domain::convergence_queue::{ConvergenceQueueEntry, ConvergenceQueueEntryStatus};
 use ingot_domain::git_operation::{
-    ConvergenceReplayMetadata, GitOperation, GitOperationEntityRef, GitOperationStatus,
-    OperationPayload,
+    ConvergenceConflictFile, ConvergenceConflictMetadata, ConvergenceReplayMetadata, GitOperation,
+    GitOperationEntityRef, GitOperationStatus, OperationPayload,
+    truncate_convergence_conflict_git_error,
 };
 use ingot_domain::git_ref::GitRef;
-use ingot_domain::ids::{GitOperationId, WorkspaceId};
+use ingot_domain::ids::{ActivityId, GitOperationId, WorkspaceId};
 use ingot_domain::item::{ApprovalState, Escalation, EscalationReason};
 use ingot_domain::job::Job;
-use ingot_domain::ports::ProjectMutationLockPort;
+use ingot_domain::ports::{
+    ItemEscalationPatch, PrepareConvergenceFailureMutation, PrepareConvergenceFailureRepository,
+    ProjectMutationLockPort,
+};
 use ingot_domain::project::Project;
 use ingot_domain::revision::ItemRevision;
 use ingot_domain::step_id::StepId;
@@ -25,16 +29,19 @@ use ingot_domain::workspace::{
 };
 use ingot_git::commands::{git, resolve_ref_oid};
 use ingot_git::commit::{
-    ConvergenceCommitTrailers, abort_cherry_pick, cherry_pick_no_commit, commit_message,
-    list_commits_oldest_first, working_tree_has_changes,
+    ConvergenceCommitTrailers, abort_cherry_pick, cherry_pick_no_commit,
+    collect_convergence_conflict_files, commit_message, list_commits_oldest_first,
+    working_tree_has_changes,
 };
 use ingot_git::project_repo::{CheckoutSyncStatus, checkout_sync_status};
 use ingot_usecases::convergence::{FinalizePreparedTrigger, finalize_prepared_convergence};
 use ingot_usecases::job::{DispatchJobCommand, dispatch_job};
 use ingot_workspace::provision_integration_workspace;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{JobDispatcher, RuntimeError, RuntimeFinalizePort, usecase_to_runtime_error};
+
+const MAX_PREPARE_FAILURE_SUMMARY_BYTES: usize = 2 * 1024;
 
 impl JobDispatcher {
     pub(crate) async fn auto_finalize_prepared_convergence(
@@ -173,74 +180,115 @@ impl JobDispatcher {
         operation: &mut GitOperation,
         source_commit_oids: &[CommitOid],
         prepared_commit_oids: &[CommitOid],
-        summary: String,
+        raw_summary: String,
         failure_kind: PrepareFailureKind,
+        conflict: Option<ConvergenceConflictMetadata>,
     ) -> Result<(), RuntimeError> {
-        integration_workspace.mark_error(Utc::now());
-        self.db.update_workspace(integration_workspace).await?;
+        let summary = format_prepare_failure_summary(&raw_summary);
+        let mut updated_workspace = integration_workspace.clone();
+        updated_workspace.mark_error(Utc::now());
+
+        let mut updated_convergence = convergence.clone();
 
         match failure_kind {
             PrepareFailureKind::Conflicted => {
-                convergence
+                updated_convergence
                     .transition_to_conflicted(summary.clone(), Utc::now())
                     .map_err(|error| RuntimeError::InvalidState(error.to_string()))?;
             }
             PrepareFailureKind::Failed => {
-                convergence.transition_to_failed(Some(summary.clone()), Utc::now());
+                updated_convergence.transition_to_failed(Some(summary.clone()), Utc::now());
             }
         }
-        self.db.update_convergence(convergence).await?;
 
         let escalation_reason = match failure_kind {
             PrepareFailureKind::Conflicted => EscalationReason::ConvergenceConflict,
             PrepareFailureKind::Failed => EscalationReason::StepFailed,
         };
-        let mut escalated_item = self.db.get_item(item.id).await?;
-        escalated_item.approval_state = match revision.approval_policy {
-            ingot_domain::revision::ApprovalPolicy::Required => ApprovalState::NotRequested,
-            ingot_domain::revision::ApprovalPolicy::NotRequired => ApprovalState::NotRequired,
+        let item_escalation = ItemEscalationPatch {
+            id: item.id,
+            approval_state: match revision.approval_policy {
+                ingot_domain::revision::ApprovalPolicy::Required => ApprovalState::NotRequested,
+                ingot_domain::revision::ApprovalPolicy::NotRequired => ApprovalState::NotRequired,
+            },
+            escalation: Escalation::OperatorRequired {
+                reason: escalation_reason,
+            },
+            updated_at: Utc::now(),
         };
-        escalated_item.escalation = Escalation::OperatorRequired {
-            reason: escalation_reason,
-        };
-        escalated_item.updated_at = Utc::now();
-        self.db.update_item(&escalated_item).await?;
 
         let mut released_queue = queue_entry.clone();
         released_queue.status = ConvergenceQueueEntryStatus::Released;
         released_queue.released_at = Some(Utc::now());
         released_queue.updated_at = Utc::now();
-        self.db.update_queue_entry(&released_queue).await?;
 
-        operation.status = GitOperationStatus::Failed;
-        operation.completed_at = Some(Utc::now());
-        operation
+        let mut updated_operation = operation.clone();
+        updated_operation.status = GitOperationStatus::Failed;
+        updated_operation.completed_at = Some(Utc::now());
+        updated_operation
             .payload
             .set_replay_metadata(ConvergenceReplayMetadata {
                 source_commit_oids: source_commit_oids.to_vec(),
                 prepared_commit_oids: prepared_commit_oids.to_vec(),
+                conflict,
             })
             .map_err(|error| RuntimeError::InvalidState(error.to_string()))?;
-        self.db.update_git_operation(operation).await?;
 
         let event_type = match failure_kind {
             PrepareFailureKind::Conflicted => ActivityEventType::ConvergenceConflicted,
             PrepareFailureKind::Failed => ActivityEventType::ConvergenceFailed,
         };
-        self.append_activity(
-            project.id,
-            event_type,
-            ActivitySubject::Convergence(convergence.id),
-            serde_json::json!({ "item_id": item.id, "summary": summary }),
+        let activities = vec![
+            Activity {
+                id: ActivityId::new(),
+                project_id: project.id,
+                event_type,
+                subject: ActivitySubject::Convergence(updated_convergence.id),
+                payload: serde_json::json!({ "item_id": item.id, "summary": summary }),
+                created_at: Utc::now(),
+            },
+            Activity {
+                id: ActivityId::new(),
+                project_id: project.id,
+                event_type: ActivityEventType::ItemEscalated,
+                subject: ActivitySubject::Item(item.id),
+                payload: serde_json::json!({ "reason": escalation_reason }),
+                created_at: Utc::now(),
+            },
+        ];
+        let event_notifications = activities
+            .iter()
+            .map(|activity| {
+                (
+                    activity.project_id,
+                    activity.event_type,
+                    activity.subject.clone(),
+                    activity.payload.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        PrepareConvergenceFailureRepository::apply_prepare_convergence_failure(
+            &self.db,
+            PrepareConvergenceFailureMutation {
+                workspace: updated_workspace.clone(),
+                convergence: updated_convergence.clone(),
+                item: item_escalation,
+                queue_entry: released_queue,
+                git_operation: updated_operation.clone(),
+                activities,
+            },
         )
         .await?;
-        self.append_activity(
-            project.id,
-            ActivityEventType::ItemEscalated,
-            ActivitySubject::Item(item.id),
-            serde_json::json!({ "reason": escalation_reason }),
-        )
-        .await?;
+
+        *integration_workspace = updated_workspace;
+        *convergence = updated_convergence;
+        *operation = updated_operation;
+
+        for (project_id, event_type, subject, payload) in event_notifications {
+            self.ui_events
+                .publish_entity_changed(project_id, event_type, subject, payload);
+        }
 
         Ok(())
     }
@@ -385,6 +433,7 @@ impl JobDispatcher {
                 replay_metadata: Some(ConvergenceReplayMetadata {
                     source_commit_oids: source_commit_oids.clone(),
                     prepared_commit_oids: vec![],
+                    conflict: None,
                 }),
             },
             status: GitOperationStatus::Planned,
@@ -408,7 +457,42 @@ impl JobDispatcher {
             if let Err(error) =
                 cherry_pick_no_commit(&integration_workspace_dir, source_commit_oid).await
             {
-                let _ = abort_cherry_pick(&integration_workspace_dir).await;
+                let git_error = truncate_convergence_conflict_git_error(&error.to_string());
+                let (conflict_files, total_conflict_file_count) =
+                    match collect_convergence_conflict_files(&integration_workspace_dir).await {
+                        Ok(collected) => (collected.files, collected.total_count),
+                        Err(error) => {
+                            warn!(
+                                ?error,
+                                convergence_id = %convergence.id,
+                                source_commit_oid = %source_commit_oid,
+                                "failed to collect convergence conflict files"
+                            );
+                            (Vec::new(), 0)
+                        }
+                    };
+                let summary = format_convergence_conflict_summary(
+                    source_commit_oid,
+                    &conflict_files,
+                    total_conflict_file_count,
+                    &git_error,
+                );
+                let files_truncated = total_conflict_file_count > conflict_files.len();
+                let conflict = ConvergenceConflictMetadata {
+                    failed_source_commit_oid: source_commit_oid.clone(),
+                    git_error,
+                    total_file_count: total_conflict_file_count,
+                    files_truncated,
+                    files: conflict_files,
+                };
+                if let Err(error) = abort_cherry_pick(&integration_workspace_dir).await {
+                    warn!(
+                        ?error,
+                        convergence_id = %convergence.id,
+                        source_commit_oid = %source_commit_oid,
+                        "failed to abort conflicted convergence cherry-pick"
+                    );
+                }
                 self.fail_prepare_convergence_attempt(
                     project,
                     item,
@@ -419,8 +503,9 @@ impl JobDispatcher {
                     &mut operation,
                     &source_commit_oids,
                     &prepared_commit_oids,
-                    error.to_string(),
+                    summary,
                     PrepareFailureKind::Conflicted,
+                    Some(conflict),
                 )
                 .await?;
                 return Ok(());
@@ -442,6 +527,7 @@ impl JobDispatcher {
                             &prepared_commit_oids,
                             error.to_string(),
                             PrepareFailureKind::Failed,
+                            None,
                         )
                         .await?;
                         return Ok(());
@@ -466,6 +552,7 @@ impl JobDispatcher {
                         &prepared_commit_oids,
                         error.to_string(),
                         PrepareFailureKind::Failed,
+                        None,
                     )
                     .await?;
                     return Ok(());
@@ -498,6 +585,7 @@ impl JobDispatcher {
                         &prepared_commit_oids,
                         error.to_string(),
                         PrepareFailureKind::Failed,
+                        None,
                     )
                     .await?;
                     return Ok(());
@@ -526,6 +614,7 @@ impl JobDispatcher {
                         &prepared_commit_oids,
                         error.to_string(),
                         PrepareFailureKind::Failed,
+                        None,
                     )
                     .await?;
                     return Ok(());
@@ -552,6 +641,7 @@ impl JobDispatcher {
             .set_replay_metadata(ConvergenceReplayMetadata {
                 source_commit_oids,
                 prepared_commit_oids,
+                conflict: None,
             })
             .map_err(|error| RuntimeError::InvalidState(error.to_string()))?;
         self.mark_git_operation_reconciled(&mut operation).await?;
@@ -664,5 +754,164 @@ impl JobDispatcher {
         }
 
         Ok(status)
+    }
+}
+
+fn format_convergence_conflict_summary(
+    failed_source_commit_oid: &CommitOid,
+    files: &[ConvergenceConflictFile],
+    total_file_count: usize,
+    git_error: &str,
+) -> String {
+    let short_oid = failed_source_commit_oid
+        .as_str()
+        .chars()
+        .take(12)
+        .collect::<String>();
+    let first_error_line = git_error
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("git cherry-pick failed");
+    if files.is_empty() {
+        return format!("Cherry-pick conflict while replaying {short_oid}: {first_error_line}");
+    }
+
+    // Keep the persisted human summary compact; structured metadata carries the larger file list.
+    let displayed_paths = files.iter().take(5).collect::<Vec<_>>();
+    let display_paths = displayed_paths
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remaining = total_file_count.saturating_sub(displayed_paths.len());
+    let suffix = if remaining == 0 {
+        String::new()
+    } else {
+        format!(" (+{remaining} more)")
+    };
+
+    format!(
+        "Cherry-pick conflict while replaying {short_oid} in {total_file_count} {}: {display_paths}{suffix}; {first_error_line}",
+        if total_file_count == 1 {
+            "file"
+        } else {
+            "files"
+        }
+    )
+}
+
+fn format_prepare_failure_summary(raw_summary: &str) -> String {
+    let sanitized = sanitize_prepare_failure_summary(raw_summary);
+    let summary = sanitized.trim();
+    if summary.is_empty() {
+        return "prepare convergence failed".to_owned();
+    }
+
+    // Human summaries stay marker-free for table/activity display; raw git_error metadata carries
+    // the explicit "[truncated]" marker where operators can inspect the persisted diagnostic text.
+    truncate_summary_to_char_boundary(summary, MAX_PREPARE_FAILURE_SUMMARY_BYTES)
+}
+
+fn sanitize_prepare_failure_summary(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| matches!(ch, '\n' | '\r' | '\t') || !ch.is_control())
+        .collect()
+}
+
+fn truncate_summary_to_char_boundary(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+
+    let end = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= max_bytes)
+        .last()
+        .unwrap_or(0);
+    value[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_prepare_failure_summary_caps_without_metadata_marker() {
+        let raw_summary = format!("first line\n{}\nlast line", "é".repeat(2_000));
+
+        let summary = format_prepare_failure_summary(&raw_summary);
+
+        assert!(summary.len() <= 2 * 1024);
+        assert!(summary.is_char_boundary(summary.len()));
+        assert!(summary.starts_with("first line\n"));
+        assert!(!summary.ends_with("\n[truncated]"));
+    }
+
+    #[test]
+    fn format_prepare_failure_summary_strips_control_bytes() {
+        let summary = format_prepare_failure_summary("\u{1b}[31mfailed\u{0}\nnext");
+
+        assert_eq!(summary, "[31mfailed\nnext");
+    }
+
+    #[test]
+    fn format_convergence_conflict_summary_pluralizes_file_count() {
+        let file = ConvergenceConflictFile {
+            path: "tracked.txt".into(),
+            stages: Vec::new(),
+            excerpt: None,
+        };
+
+        let one = format_convergence_conflict_summary(
+            &CommitOid::new("0123456789abcdef"),
+            std::slice::from_ref(&file),
+            1,
+            "git failed",
+        );
+        let two = format_convergence_conflict_summary(
+            &CommitOid::new("0123456789abcdef"),
+            &[file],
+            2,
+            "git failed",
+        );
+
+        assert!(one.contains("in 1 file:"));
+        assert!(two.contains("in 2 files:"));
+        assert!(two.contains("(+1 more)"));
+    }
+
+    #[test]
+    fn format_convergence_conflict_summary_uses_default_for_blank_git_error() {
+        let file = ConvergenceConflictFile {
+            path: "tracked.txt".into(),
+            stages: Vec::new(),
+            excerpt: None,
+        };
+
+        let summary = format_convergence_conflict_summary(
+            &CommitOid::new("0123456789abcdef"),
+            &[file],
+            1,
+            "\n",
+        );
+
+        assert!(summary.ends_with("git cherry-pick failed"));
+    }
+
+    #[test]
+    fn format_convergence_conflict_summary_handles_missing_file_metadata() {
+        let summary = format_convergence_conflict_summary(
+            &CommitOid::new("0123456789abcdef"),
+            &[],
+            2,
+            "git failed",
+        );
+
+        assert_eq!(
+            summary,
+            "Cherry-pick conflict while replaying 0123456789ab: git failed"
+        );
     }
 }

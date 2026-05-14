@@ -5,7 +5,9 @@ use axum::http::{Request, StatusCode, header};
 use chrono::Utc;
 use ingot_domain::convergence::ConvergenceStatus;
 use ingot_domain::git_operation::{
-    GitOperation, GitOperationEntityRef, GitOperationStatus, OperationPayload,
+    ConvergenceConflictFile, ConvergenceConflictMetadata, ConvergenceConflictStage,
+    ConvergenceReplayMetadata, GitOperation, GitOperationEntityRef, GitOperationStatus,
+    OperationPayload,
 };
 use ingot_domain::ids::{ConvergenceId, GitOperationId, ProjectId, WorkspaceId};
 use ingot_domain::item::{ApprovalState, Escalation, EscalationReason, ParkingState};
@@ -156,6 +158,138 @@ async fn create_item_route_derives_initial_revision_with_null_seed_commit() {
         .await
         .expect("revision count");
     assert_eq!(revision_count, 1);
+}
+
+#[tokio::test]
+async fn item_detail_exposes_convergence_conflict_metadata() {
+    let repo = temp_git_repo("ingot-http-api");
+    let head = git_output(&repo, &["rev-parse", "HEAD"]);
+    let db = migrated_test_db("ingot-http-api-db").await;
+    let project_id = "prj_00000000000000000000000000000024".to_string();
+    let item_id = "itm_00000000000000000000000000000024".to_string();
+    let revision_id = "rev_00000000000000000000000000000024".to_string();
+    let source_workspace_id = "wrk_00000000000000000000000000000024".to_string();
+    let integration_workspace_id = "wrk_00000000000000000000000000000124".to_string();
+    let convergence_id = "conv_00000000000000000000000000000024".to_string();
+
+    let (_, item, revision) = persist_test_change(
+        &db,
+        &repo,
+        &project_id,
+        &item_id,
+        &revision_id,
+        |item| item,
+        |revision| {
+            revision.seed(AuthoringBaseSeed::Explicit {
+                seed_commit_oid: head.clone().into(),
+                seed_target_commit_oid: head.clone().into(),
+            })
+        },
+    )
+    .await;
+    let source_workspace = persist_test_workspace(
+        &db,
+        &project_id,
+        WorkspaceKind::Authoring,
+        &source_workspace_id,
+        |workspace| {
+            workspace
+                .created_for_revision_id(revision.id)
+                .base_commit_oid(&head)
+                .head_commit_oid(&head)
+                .status(WorkspaceStatus::Ready)
+        },
+    )
+    .await;
+    let integration_workspace = persist_test_workspace(
+        &db,
+        &project_id,
+        WorkspaceKind::Integration,
+        &integration_workspace_id,
+        |workspace| {
+            workspace
+                .created_for_revision_id(revision.id)
+                .base_commit_oid(&head)
+                .head_commit_oid(&head)
+                .status(WorkspaceStatus::Error)
+        },
+    )
+    .await;
+    let convergence = persist_test_convergence(
+        &db,
+        &project_id,
+        &item_id,
+        &revision_id,
+        &convergence_id,
+        |convergence| {
+            convergence
+                .source_workspace_id(source_workspace.id)
+                .integration_workspace_id(integration_workspace.id)
+                .source_head_commit_oid(&head)
+                .input_target_commit_oid(&head)
+                .no_prepared_commit_oid()
+                .status(ConvergenceStatus::Conflicted)
+                .conflict_summary("tracked.txt conflicted")
+        },
+    )
+    .await;
+    let conflict = ConvergenceConflictMetadata {
+        failed_source_commit_oid: head.clone().into(),
+        git_error: "git failed".into(),
+        total_file_count: 1,
+        files_truncated: false,
+        files: vec![ConvergenceConflictFile {
+            path: "tracked.txt".into(),
+            stages: vec![
+                ConvergenceConflictStage::Ours,
+                ConvergenceConflictStage::Theirs,
+            ],
+            excerpt: Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs".into()),
+        }],
+    };
+    db.create_git_operation(&GitOperation {
+        id: GitOperationId::new(),
+        project_id: parse_id::<ProjectId>(&project_id),
+        entity: GitOperationEntityRef::Convergence(convergence.id),
+        payload: OperationPayload::PrepareConvergenceCommit {
+            workspace_id: integration_workspace.id,
+            ref_name: integration_workspace.workspace_ref.clone(),
+            expected_old_oid: head.clone().into(),
+            commit_oid: None,
+            replay_metadata: Some(ConvergenceReplayMetadata {
+                source_commit_oids: vec![head.clone().into()],
+                prepared_commit_oids: Vec::new(),
+                conflict: Some(conflict),
+            }),
+        },
+        status: GitOperationStatus::Failed,
+        created_at: Utc::now(),
+        completed_at: Some(Utc::now()),
+    })
+    .await
+    .expect("insert prepare op");
+
+    let response = test_router(db.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/items/{}", item.id))
+                .body(Body::empty())
+                .expect("build detail request"),
+        )
+        .await
+        .expect("detail route response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value = read_json(response).await;
+    let conflict = &json["convergences"][0]["conflict"];
+
+    assert_eq!(conflict["total_file_count"].as_u64(), Some(1));
+    assert_eq!(conflict["files"][0]["path"].as_str(), Some("tracked.txt"));
+    assert_eq!(conflict["files"][0]["stages"][0].as_str(), Some("ours"));
+    assert!(
+        conflict["files"][0]["excerpt"]
+            .as_str()
+            .is_some_and(|excerpt| excerpt.contains("<<<<<<<"))
+    );
 }
 
 #[tokio::test]

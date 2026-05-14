@@ -7,6 +7,7 @@ use ingot_domain::commit_oid::CommitOid;
 use ingot_domain::convergence::{CheckoutAdoptionState, ConvergenceStatus};
 use ingot_domain::convergence_queue::ConvergenceQueueEntryStatus;
 use ingot_domain::finding::{Finding, FindingTriageState};
+use ingot_domain::git_operation::ConvergenceConflictStage;
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::{AgentId, ConvergenceId, FindingId, ItemId, JobId, ProjectId, WorkspaceId};
 use ingot_domain::item::{Classification, Item, Priority};
@@ -56,7 +57,32 @@ pub struct ConvergenceResponse {
     pub input_target_commit_oid: Option<CommitOid>,
     pub prepared_commit_oid: Option<CommitOid>,
     pub final_target_commit_oid: Option<CommitOid>,
+    pub conflict_summary: Option<String>,
+    pub failure_summary: Option<String>,
+    /// Structured metadata from the latest prepare operation when available.
+    /// Older conflicted convergences may have a summary but no structured metadata.
+    pub conflict: Option<ConvergenceConflictResponse>,
     pub target_head_valid: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConvergenceConflictResponse {
+    pub failed_source_commit_oid: CommitOid,
+    /// Bounded git diagnostic text. It may include paths from the conflicted repository.
+    pub git_error: String,
+    pub total_file_count: usize,
+    /// True when `files` is incomplete relative to `total_file_count`, either because records
+    /// were capped for response size or because Git reported paths that cannot be surfaced as
+    /// UTF-8 strings.
+    pub files_truncated: bool,
+    pub files: Vec<ConvergenceConflictFileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConvergenceConflictFileResponse {
+    pub path: String,
+    pub stages: Vec<ConvergenceConflictStage>,
+    pub excerpt: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

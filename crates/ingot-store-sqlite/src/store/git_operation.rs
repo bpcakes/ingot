@@ -1,7 +1,10 @@
-use ingot_domain::git_operation::{GitOperation, GitOperationWire};
+use std::collections::HashSet;
+
+use ingot_domain::git_operation::{GitOperation, GitOperationEntityRef, GitOperationWire};
 use ingot_domain::git_ref::GitRef;
 use ingot_domain::ids::ConvergenceId;
 use ingot_domain::ports::{ConflictKind, GitOperationRepository, RepositoryError};
+use sqlx::QueryBuilder;
 use sqlx::sqlite::SqliteRow;
 
 use super::helpers::{
@@ -120,6 +123,80 @@ impl Database {
         .map_err(db_err)?;
 
         map_optional_row(row, map_git_operation)
+    }
+
+    pub async fn list_latest_failed_prepare_for_convergences(
+        &self,
+        convergence_ids: &[ConvergenceId],
+    ) -> Result<Vec<GitOperation>, RepositoryError> {
+        // Stay below SQLite builds that still use a 999 bind-parameter limit.
+        const SQLITE_BIND_CHUNK_SIZE: usize = 900;
+
+        if convergence_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut requested = HashSet::new();
+        let convergence_ids = convergence_ids
+            .iter()
+            .copied()
+            .filter(|convergence_id| requested.insert(*convergence_id))
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        let mut operations = Vec::new();
+        for chunk in convergence_ids.chunks(SQLITE_BIND_CHUNK_SIZE) {
+            for operation in self
+                .list_latest_failed_prepare_for_convergence_chunk(chunk)
+                .await?
+            {
+                let GitOperationEntityRef::Convergence(convergence_id) = operation.entity else {
+                    continue;
+                };
+                // Each chunk dedups the latest operation for each convergence because a
+                // convergence may have history; this final seen set is a defensive backstop.
+                if seen.insert(convergence_id) {
+                    operations.push(operation);
+                }
+            }
+        }
+
+        Ok(operations)
+    }
+
+    async fn list_latest_failed_prepare_for_convergence_chunk(
+        &self,
+        convergence_ids: &[ConvergenceId],
+    ) -> Result<Vec<GitOperation>, RepositoryError> {
+        let mut query = QueryBuilder::new(
+            "SELECT id, project_id, operation_kind, entity_type, entity_id, workspace_id, ref_name,
+                    expected_old_oid, new_oid, commit_oid, status, metadata, created_at, completed_at
+             FROM git_operations
+             WHERE operation_kind = 'prepare_convergence_commit'
+               AND entity_type = 'convergence'
+               AND status = 'failed'
+               AND entity_id IN (",
+        );
+        let mut separated = query.separated(", ");
+        for convergence_id in convergence_ids {
+            separated.push_bind(convergence_id.to_string());
+        }
+        separated.push_unseparated(")");
+        query.push(" ORDER BY entity_id ASC, created_at DESC, id DESC");
+
+        let rows = query.build().fetch_all(&self.pool).await.map_err(db_err)?;
+        let mut operations = Vec::new();
+        let mut seen = HashSet::new();
+        for row in rows {
+            let operation = map_git_operation(&row)?;
+            let GitOperationEntityRef::Convergence(convergence_id) = operation.entity else {
+                continue;
+            };
+            if seen.insert(convergence_id) {
+                operations.push(operation);
+            }
+        }
+
+        Ok(operations)
     }
 
     pub async fn delete_investigation_ref_git_operations(

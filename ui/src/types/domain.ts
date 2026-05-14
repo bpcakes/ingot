@@ -369,8 +369,27 @@ export interface Convergence {
   input_target_commit_oid: string | null
   prepared_commit_oid: string | null
   final_target_commit_oid: string | null
+  conflict_summary: string | null
+  failure_summary: string | null
+  conflict: ConvergenceConflict | null
   target_head_valid: boolean
 }
+
+export interface ConvergenceConflict {
+  failed_source_commit_oid: string
+  git_error: string
+  total_file_count: number
+  files_truncated: boolean
+  files: ConvergenceConflictFile[]
+}
+
+export interface ConvergenceConflictFile {
+  path: string
+  stages: ConvergenceConflictStage[]
+  excerpt: string | null
+}
+
+export type ConvergenceConflictStage = 'base' | 'ours' | 'theirs'
 
 export interface Finding {
   id: string

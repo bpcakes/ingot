@@ -209,6 +209,32 @@ describe('domain contract typing', () => {
           input_target_commit_oid: 'abc123456789',
           prepared_commit_oid: 'def456789012',
           final_target_commit_oid: null,
+          conflict_summary: null,
+          failure_summary: null,
+          conflict: null,
+          target_head_valid: true,
+        },
+        {
+          id: 'conv_2',
+          status: 'conflicted',
+          input_target_commit_oid: 'abc123456789',
+          prepared_commit_oid: null,
+          final_target_commit_oid: null,
+          conflict_summary: 'tracked.txt conflicted while replaying abc123',
+          failure_summary: null,
+          conflict: {
+            failed_source_commit_oid: 'abc123456789',
+            git_error: 'git cherry-pick failed',
+            total_file_count: 2,
+            files_truncated: true,
+            files: [
+              {
+                path: 'tracked.txt',
+                stages: ['base', 'ours', 'theirs'],
+                excerpt: '<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs',
+              },
+            ],
+          },
           target_head_valid: true,
         },
       ],
@@ -240,5 +266,7 @@ describe('domain contract typing', () => {
     expect(detail.findings[0]?.investigation?.promotion.title).toBe('Extract shared helper')
     expect(detail.revision_context_summary?.accepted_result_refs).toHaveLength(1)
     expect(detail.convergences[0]?.final_target_commit_oid).toBeNull()
+    expect(detail.convergences[1]?.conflict?.files[0]?.stages).toEqual(['base', 'ours', 'theirs'])
+    expect(detail.convergences[1]?.conflict?.files_truncated).toBe(true)
   })
 })

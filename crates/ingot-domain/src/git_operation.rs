@@ -5,6 +5,8 @@ use crate::commit_oid::CommitOid;
 use crate::git_ref::GitRef;
 use crate::ids::{ConvergenceId, GitOperationId, ItemRevisionId, JobId, ProjectId, WorkspaceId};
 
+pub const MAX_CONVERGENCE_CONFLICT_GIT_ERROR_BYTES: usize = 2 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
@@ -47,6 +49,75 @@ pub enum OperationPayloadError {
 pub struct ConvergenceReplayMetadata {
     pub source_commit_oids: Vec<CommitOid>,
     pub prepared_commit_oids: Vec<CommitOid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<ConvergenceConflictMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvergenceConflictMetadata {
+    pub failed_source_commit_oid: CommitOid,
+    pub git_error: String,
+    #[serde(default)]
+    pub total_file_count: usize,
+    /// True when `files` is an incomplete representation of `total_file_count`.
+    /// This includes both the bounded file-record cap and paths omitted because they cannot be
+    /// safely represented in the API as UTF-8 strings.
+    #[serde(default)]
+    pub files_truncated: bool,
+    pub files: Vec<ConvergenceConflictFile>,
+}
+
+#[must_use]
+pub fn truncate_convergence_conflict_git_error(error: &str) -> String {
+    truncate_to_char_boundary(error, MAX_CONVERGENCE_CONFLICT_GIT_ERROR_BYTES)
+}
+
+fn truncate_to_char_boundary(value: &str, max_bytes: usize) -> String {
+    const TRUNCATED_SUFFIX: &str = "\n[truncated]";
+
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+
+    let content_budget = max_bytes.saturating_sub(TRUNCATED_SUFFIX.len());
+    let end = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= content_budget)
+        .last()
+        .unwrap_or(0);
+    format!("{}{}", &value[..end], TRUNCATED_SUFFIX)
+}
+
+fn bound_replay_metadata_conflict_git_error(
+    mut metadata: ConvergenceReplayMetadata,
+) -> ConvergenceReplayMetadata {
+    if let Some(conflict) = metadata.conflict.as_mut() {
+        conflict.git_error = truncate_convergence_conflict_git_error(&conflict.git_error);
+    }
+    metadata
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvergenceConflictFile {
+    /// Repository-relative conflict path. This is retained even for sensitive filenames so
+    /// operators can locate and resolve the conflict; the excerpt denylist suppresses contents,
+    /// not path visibility.
+    pub path: String,
+    pub stages: Vec<ConvergenceConflictStage>,
+    /// Best-effort excerpt from the first conflict hunk, or None when content could not be read.
+    /// Excerpts use a denylist for obvious secret paths, but operators with item access may still
+    /// see sensitive text from non-standard filenames.
+    pub excerpt: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvergenceConflictStage {
+    // Keep declaration order as Base < Ours < Theirs; collectors sort stages before persisting.
+    Base,
+    Ours,
+    Theirs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,7 +366,7 @@ impl OperationPayload {
             Self::PrepareConvergenceCommit {
                 replay_metadata, ..
             } => {
-                *replay_metadata = Some(metadata);
+                *replay_metadata = Some(bound_replay_metadata_conflict_git_error(metadata));
                 Ok(())
             }
             _ => Err(OperationPayloadError::NotPrepareConvergenceCommit),
@@ -505,10 +576,12 @@ impl From<&GitOperation> for GitOperationWire {
             new_oid: op.new_oid().cloned(),
             commit_oid: op.commit_oid().cloned(),
             status: op.status,
-            metadata: op
-                .payload
-                .replay_metadata()
-                .map(|metadata| serde_json::to_value(metadata).expect("serialize replay metadata")),
+            metadata: op.payload.replay_metadata().map(|metadata| {
+                // Some tests and recovery paths construct operations from raw metadata; keep the
+                // storage boundary defensive even when set_replay_metadata was not called.
+                serde_json::to_value(bound_replay_metadata_conflict_git_error(metadata.clone()))
+                    .expect("serialize replay metadata")
+            }),
             created_at: op.created_at,
             completed_at: op.completed_at,
         }
@@ -640,6 +713,7 @@ mod tests {
             .set_replay_metadata(ConvergenceReplayMetadata {
                 source_commit_oids: vec![CommitOid::from("s1")],
                 prepared_commit_oids: vec![CommitOid::from("p1")],
+                conflict: None,
             })
             .unwrap();
         match &payload {
@@ -652,6 +726,121 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn set_replay_metadata_bounds_conflict_git_error() {
+        let mut payload = OperationPayload::PrepareConvergenceCommit {
+            workspace_id: test_workspace_id(),
+            ref_name: None,
+            expected_old_oid: "old".into(),
+            commit_oid: None,
+            replay_metadata: None,
+        };
+        payload
+            .set_replay_metadata(ConvergenceReplayMetadata {
+                source_commit_oids: vec![CommitOid::from("s1")],
+                prepared_commit_oids: vec![],
+                conflict: Some(ConvergenceConflictMetadata {
+                    failed_source_commit_oid: CommitOid::from("s1"),
+                    git_error: "é".repeat(2_000),
+                    total_file_count: 0,
+                    files_truncated: false,
+                    files: Vec::new(),
+                }),
+            })
+            .unwrap();
+
+        let conflict = payload
+            .replay_metadata()
+            .and_then(|metadata| metadata.conflict.as_ref())
+            .expect("conflict metadata");
+        assert!(conflict.git_error.len() <= MAX_CONVERGENCE_CONFLICT_GIT_ERROR_BYTES);
+        assert!(
+            conflict
+                .git_error
+                .is_char_boundary(conflict.git_error.len())
+        );
+        assert!(conflict.git_error.ends_with("\n[truncated]"));
+    }
+
+    #[test]
+    fn git_operation_wire_bounds_conflict_git_error_for_storage() {
+        let operation = GitOperationBuilder::new(
+            test_project_id(),
+            OperationKind::PrepareConvergenceCommit,
+            GitOperationEntityRef::Convergence(ConvergenceId::new()),
+        )
+        .workspace_id(test_workspace_id())
+        .expected_old_oid("old")
+        .metadata(
+            serde_json::to_value(ConvergenceReplayMetadata {
+                source_commit_oids: vec![CommitOid::from("s1")],
+                prepared_commit_oids: vec![],
+                conflict: Some(ConvergenceConflictMetadata {
+                    failed_source_commit_oid: CommitOid::from("s1"),
+                    git_error: "x".repeat(3_000),
+                    total_file_count: 0,
+                    files_truncated: false,
+                    files: Vec::new(),
+                }),
+            })
+            .unwrap(),
+        )
+        .build();
+
+        let wire = GitOperationWire::from(&operation);
+        let metadata: ConvergenceReplayMetadata =
+            serde_json::from_value(wire.metadata.expect("metadata")).unwrap();
+        let conflict = metadata.conflict.expect("conflict metadata");
+
+        assert!(conflict.git_error.len() <= MAX_CONVERGENCE_CONFLICT_GIT_ERROR_BYTES);
+        assert!(conflict.git_error.ends_with("\n[truncated]"));
+    }
+
+    #[test]
+    fn replay_metadata_deserializes_without_conflict_field() {
+        let metadata: ConvergenceReplayMetadata = serde_json::from_value(serde_json::json!({
+            "source_commit_oids": ["s1"],
+            "prepared_commit_oids": ["p1"]
+        }))
+        .expect("metadata should deserialize without conflict field");
+
+        assert_eq!(metadata.source_commit_oids, vec![CommitOid::from("s1")]);
+        assert_eq!(metadata.prepared_commit_oids, vec![CommitOid::from("p1")]);
+        assert_eq!(metadata.conflict, None);
+    }
+
+    #[test]
+    fn replay_metadata_serializes_without_null_conflict_field() {
+        let metadata = serde_json::to_value(ConvergenceReplayMetadata {
+            source_commit_oids: vec![CommitOid::from("s1")],
+            prepared_commit_oids: vec![],
+            conflict: None,
+        })
+        .expect("serialize metadata");
+
+        assert_eq!(metadata.get("conflict"), None);
+    }
+
+    #[test]
+    fn convergence_conflict_stage_order_matches_display_order() {
+        let mut stages = vec![
+            ConvergenceConflictStage::Theirs,
+            ConvergenceConflictStage::Base,
+            ConvergenceConflictStage::Ours,
+        ];
+
+        stages.sort();
+
+        assert_eq!(
+            stages,
+            vec![
+                ConvergenceConflictStage::Base,
+                ConvergenceConflictStage::Ours,
+                ConvergenceConflictStage::Theirs
+            ]
+        );
     }
 
     #[test]
@@ -684,6 +873,7 @@ mod tests {
             .set_replay_metadata(ConvergenceReplayMetadata {
                 source_commit_oids: vec![CommitOid::from("s1")],
                 prepared_commit_oids: vec![CommitOid::from("p1")],
+                conflict: None,
             })
             .expect_err("job payload should reject convergence replay metadata");
 
